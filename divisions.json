@@ -1,0 +1,12 @@
+{
+  "Eastern_Conference": {
+    "Atlantic": ["bkn", "bos", "ny", "phi", "tor"],
+    "Central": ["chi", "cle", "det", "ind", "mil"],
+    "Southeast": ["atl", "cha", "mia", "orl", "wsh"]
+  },
+  "Western_Conference": {
+    "Northwest": ["den", "min", "okc", "por", "utah"],
+    "Pacific": ["gs", "lac", "lal", "phx", "sac"],
+    "Southwest": ["dal", "hou", "mem", "no", "sa"]
+  }
+}
