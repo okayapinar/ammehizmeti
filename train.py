@@ -8,7 +8,7 @@ autoresearch: AJANIN DEĞİŞTİRDİĞİ TEK DOSYA.
 """
 from collections import defaultdict
 
-from river import forest
+from river import linear_model, optim, preprocessing
 
 from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
 
@@ -22,7 +22,7 @@ SEED = 42
 class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
-        self.models = {t: forest.ARFClassifier(n_models=N_MODELS, seed=SEED) for t in TARGETS}
+        self.models = {t: preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.SGD(0.005)) for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_win = {}
         self.last_game = {}
@@ -34,26 +34,17 @@ class Model:
 
     def features(self, pre):
         home, away, date = pre["home"], pre["away"], pre["date"]
+        fav_home = pre["whos_favored"] == "home"
+        sgn = 1 if fav_home else -1
+        spread = pre["spread"] or 0.0
         return {
-            "regular": pre["regular"],
-            "playoffs": pre["playoffs"],
-            "home": home,
-            "away": away,
-            "whos_favored": pre["whos_favored"],
-            "spread": pre["spread"] or 0.0,
-            "total": pre["total"],
-            "home_division": self.team_to_division[home],
-            "away_division": self.team_to_division[away],
-            "home_conference": self.team_to_conference[home],
-            "away_conference": self.team_to_conference[away],
-            "home_after_win": self.last_win.get(home, False),
-            "away_after_win": self.last_win.get(away, False),
-            "elo_home": self.elo[home],
-            "elo_away": self.elo[away],
-            "home_rest": self.rest_days(home, date),
-            "away_rest": self.rest_days(away, date),
-            "month": date.month,
-            "day_of_week": date.weekday(),
+            "fav_home": float(fav_home),
+            "spread": spread,
+            "total": pre["total"] or 0.0,
+            "elo_edge": sgn * (self.elo[home] - self.elo[away]) / 100,
+            "elo_edge_vs_line": sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3,
+            "rest_edge": sgn * (self.rest_days(home, date) - self.rest_days(away, date)),
+            "playoffs": float(pre["playoffs"]),
         }
 
     def predict(self, pre):
