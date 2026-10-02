@@ -19,6 +19,9 @@ N_MODELS = 10
 SEED = 42
 
 
+TOTAL_DROP = ("elo_edge_vs_line", "rest_edge")
+
+
 class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
@@ -47,11 +50,17 @@ class Model:
             "playoffs": float(pre["playoffs"]),
         }
 
+    def view(self, x, target):
+        if target == "id_total":
+            return {k: v for k, v in x.items() if k not in TOTAL_DROP}
+        return x
+
     def predict(self, pre):
         x = self.features(pre)
         out = {}
         for target, model in self.models.items():
-            proba = model.predict_proba_one(x)
+            xt = self.view(x, target)
+            proba = model.predict_proba_one(xt)
             p0, p1 = proba.get(0, 0.0), proba.get(1, 0.0)
             out[target] = p1 / (p0 + p1) if p0 + p1 > 0 else 0.5
         return out
@@ -61,7 +70,7 @@ class Model:
         for target, model in self.models.items():
             y = result[target]
             if y is not None and y != PUSH:
-                model.learn_one(x, y)
+                model.learn_one(self.view(x, target), y)
         self.update_state(pre, result)
 
     def update_state(self, pre, result):
