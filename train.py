@@ -16,6 +16,7 @@ MAX_REST_DAYS = 20
 ELO_K = 20
 ELO_START = 1500
 LRS = (0.003, 0.005, 0.008)
+LINE_ALPHA = 0.01
 
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge")
@@ -28,6 +29,7 @@ class Model:
         self.elo = defaultdict(lambda: ELO_START)
         self.last_win = {}
         self.last_game = {}
+        self.mean_total = None
         self.season = None
 
     def rest_days(self, team, date):
@@ -48,12 +50,13 @@ class Model:
             "elo_edge_vs_line": sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3,
             "rest_edge": sgn * (self.rest_days(home, date) - self.rest_days(away, date)),
             "playoffs": float(pre["playoffs"]),
+            "total_centered": (pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0),
         }
 
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs")}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered")}
 
     def predict(self, pre):
         x = self.features(pre)
@@ -89,6 +92,9 @@ class Model:
         delta = ELO_K * (int(home_won) - expected_home)
         self.elo[home] += delta
         self.elo[away] -= delta
+
+        if pre["total"]:
+            self.mean_total = pre["total"] if self.mean_total is None else self.mean_total + LINE_ALPHA * (pre["total"] - self.mean_total)
 
         self.last_win[home] = home_won
         self.last_win[away] = not home_won
