@@ -53,7 +53,7 @@ class Model:
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return x
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs")}
 
     def predict(self, pre):
         x = self.features(pre)
