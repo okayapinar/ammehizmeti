@@ -25,3 +25,7 @@ htmlcov/
 .DS_Store
 Thumbs.db
 Desktop.ini
+
+# autoresearch
+results.tsv
+run.log
