@@ -29,6 +29,7 @@ class Model:
         self.elo = defaultdict(lambda: ELO_START)
         self.last_win = {}
         self.last_game = {}
+        self.season = None
 
     def rest_days(self, team, date):
         if team not in self.last_game:
@@ -74,6 +75,10 @@ class Model:
         self.update_state(pre, result)
 
     def update_state(self, pre, result):
+        if pre["season"] != self.season:
+            self.season = pre["season"]
+            for t in list(self.elo):
+                self.elo[t] = 0.75 * self.elo[t] + 0.25 * ELO_START
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
 
