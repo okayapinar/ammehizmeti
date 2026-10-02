@@ -15,8 +15,7 @@ from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
 MAX_REST_DAYS = 20
 ELO_K = 20
 ELO_START = 1500
-N_MODELS = 10
-SEED = 42
+LRS = (0.003, 0.005, 0.008)
 
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge")
@@ -25,7 +24,7 @@ TOTAL_DROP = ("elo_edge_vs_line", "rest_edge")
 class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
-        self.models = {t: preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.SGD(0.005)) for t in TARGETS}
+        self.models = {t: [preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.SGD(lr)) for lr in LRS] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_win = {}
         self.last_game = {}
@@ -59,19 +58,23 @@ class Model:
     def predict(self, pre):
         x = self.features(pre)
         out = {}
-        for target, model in self.models.items():
+        for target, models in self.models.items():
             xt = self.view(x, target)
-            proba = model.predict_proba_one(xt)
-            p0, p1 = proba.get(0, 0.0), proba.get(1, 0.0)
-            out[target] = p1 / (p0 + p1) if p0 + p1 > 0 else 0.5
+            ps = []
+            for model in models:
+                proba = model.predict_proba_one(xt)
+                p0, p1 = proba.get(0, 0.0), proba.get(1, 0.0)
+                ps.append(p1 / (p0 + p1) if p0 + p1 > 0 else 0.5)
+            out[target] = sum(ps) / len(ps)
         return out
 
     def learn(self, pre, result):
         x = self.features(pre)
-        for target, model in self.models.items():
+        for target, models in self.models.items():
             y = result[target]
             if y is not None and y != PUSH:
-                model.learn_one(self.view(x, target), y)
+                for model in models:
+                    model.learn_one(self.view(x, target), y)
         self.update_state(pre, result)
 
     def update_state(self, pre, result):
