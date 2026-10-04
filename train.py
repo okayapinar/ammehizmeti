@@ -57,7 +57,7 @@ class Model:
         home, away, date = pre["home"], pre["away"], pre["date"]
         fav_home = pre["whos_favored"] == "home"
         sgn = 1 if fav_home else -1
-        spread = pre["spread"] or 0.0
+        spread = min(pre["spread"] or 0.0, 20.0)
         x = {
             "fav_home": float(fav_home),
             "spread": spread,
