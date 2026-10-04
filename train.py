@@ -50,13 +50,14 @@ class Model:
             "rest_edge": sgn * (self.rest_days(home, date) - self.rest_days(away, date)),
             "playoffs": float(pre["playoffs"]),
             "total_centered": (pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0),
+            "sunday": float(date.weekday() == 6),
             "b2b_count": float(self.rest_days(home, date) <= 1) + float(self.rest_days(away, date) <= 1),
         }
 
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_count")}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_count", "sunday")}
 
     def predict(self, pre):
         x = self.features(pre)
