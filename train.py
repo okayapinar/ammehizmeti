@@ -51,7 +51,7 @@ class Model:
 
     @staticmethod
     def holiday(date):
-        if (date.month, date.day) in ((12, 25), (1, 1)):
+        if (date.month, date.day) == (1, 1):
             return True
         return date.month == 1 and date.weekday() == 0 and 15 <= date.day <= 21
 
