@@ -19,7 +19,7 @@ LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.01
 
 
-TOTAL_DROP = ("elo_edge_vs_line", "rest_edge")
+TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
 
 
 class Model:
