@@ -30,6 +30,7 @@ class Model:
         self.last_game = {}
         self.mean_total = None
         self.season = None
+        self.season_games = 0
 
     def rest_days(self, team, date):
         if team not in self.last_game:
@@ -51,13 +52,14 @@ class Model:
             "playoffs": float(pre["playoffs"]),
             "total_centered": (pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0),
             "sunday": float(date.weekday() == 6),
+            "early_season": float(self.season_games < 120),
             "b2b_count": float(self.rest_days(home, date) <= 1) + float(self.rest_days(away, date) <= 1),
         }
 
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_count", "sunday")}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_count", "sunday", "early_season")}
 
     def predict(self, pre):
         x = self.features(pre)
@@ -84,8 +86,10 @@ class Model:
     def update_state(self, pre, result):
         if pre["season"] != self.season:
             self.season = pre["season"]
+            self.season_games = 0
             for t in list(self.elo):
                 self.elo[t] = 0.75 * self.elo[t] + 0.25 * ELO_START
+        self.season_games += 1
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
 
