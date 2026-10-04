@@ -16,6 +16,7 @@ MAX_REST_DAYS = 20
 ELO_K = 21
 ELO_START = 1500
 ELO_HOME_ADV = 70
+ELO_WARMUP = 75  # league games per season before Elo is updated or used (~5 games per team)
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 
@@ -63,8 +64,8 @@ class Model:
             "spread": spread,
             "spread_raw": pre["spread"] or 0.0,  # total model sees the uncapped line
             "total": pre["total"] or 0.0,
-            "elo_edge": sgn * (self.elo[home] - self.elo[away]) / 100 * float(self.season_games > 75),  # Elo features off while Elo is frozen
-            "elo_edge_vs_line": max(-3.0, min(3.0, sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3)) * float(self.season_games > 75),  # no Elo disagreement signal while Elo is frozen  # extreme disagreement with the line is noise
+            "elo_edge": sgn * (self.elo[home] - self.elo[away]) / 100 * float(self.season_games > ELO_WARMUP),  # Elo features off while Elo is frozen
+            "elo_edge_vs_line": max(-3.0, min(3.0, sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3)) * float(self.season_games > ELO_WARMUP),  # no Elo disagreement signal while Elo is frozen  # extreme disagreement with the line is noise
             "rest_edge": sgn * (self.rest_days(home, date) - self.rest_days(away, date)),
             "playoffs": float(pre["playoffs"]),
             "total_centered": 100 * ((pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0)) / (self.mean_total or pre["total"] or 1.0),
@@ -128,7 +129,7 @@ class Model:
 
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - ELO_HOME_ADV) / 400))
         delta = ELO_K * (int(home_won) - expected_home)
-        if not pre["playoffs"] and self.season_games > 75:  # skip the first ~5 games per team (rotation noise)
+        if not pre["playoffs"] and self.season_games > ELO_WARMUP:  # skip the first ~5 games per team (rotation noise)
             self.elo[home] += delta
             self.elo[away] -= delta
 
