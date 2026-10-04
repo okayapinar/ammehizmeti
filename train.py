@@ -39,6 +39,12 @@ class Model:
             return MAX_REST_DAYS
         return min((date - self.last_game[team]).days, MAX_REST_DAYS)
 
+    @staticmethod
+    def holiday(date):
+        if (date.month, date.day) in ((12, 25), (1, 1)):
+            return True
+        return date.month == 1 and date.weekday() == 0 and 15 <= date.day <= 21
+
     def features(self, pre):
         home, away, date = pre["home"], pre["away"], pre["date"]
         fav_home = pre["whos_favored"] == "home"
@@ -54,6 +60,7 @@ class Model:
             "playoffs": float(pre["playoffs"]),
             "total_centered": (pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0),
             "sunday": float(date.weekday() == 6),
+            "holiday": float(self.holiday(date)),
             "early_season": float(self.season_games < 120),
             "series_game": float(self.series[frozenset((home, away))] + 1) if pre["playoffs"] else 0.0,
             "b2b_home": float(self.rest_days(home, date) <= 1),
@@ -64,7 +71,7 @@ class Model:
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "sunday", "early_season", "series_game")}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "sunday", "holiday", "early_season", "series_game")}
 
     def predict(self, pre):
         x = self.features(pre)
