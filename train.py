@@ -16,6 +16,7 @@ MAX_REST_DAYS = 20
 ELO_K = 20
 ELO_START = 1500
 LRS = (0.003, 0.005, 0.008)
+AVG_START = 2000
 LINE_ALPHA = 0.01
 BIAS_ALPHA = 0.02
 
@@ -26,7 +27,7 @@ TOTAL_DROP = ("elo_edge_vs_line", "rest_edge")
 class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
-        self.models = {t: [preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.SGD(lr)) for lr in LRS] for t in TARGETS}
+        self.models = {t: [preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.Averager(optim.SGD(lr), start=AVG_START)) for lr in LRS] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_win = {}
         self.last_game = {}
