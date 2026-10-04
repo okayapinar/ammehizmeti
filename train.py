@@ -20,7 +20,7 @@ LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 
 
-EARLY_THRESHOLDS = (60, 120, 180)
+EARLY_THRESHOLDS = (60, 120, 190)
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
 
