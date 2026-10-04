@@ -128,7 +128,7 @@ class Model:
 
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - ELO_HOME_ADV) / 400))
         delta = ELO_K * (int(home_won) - expected_home)
-        if not pre["playoffs"]:
+        if not pre["playoffs"] and self.season_games > 75:  # skip the first ~5 games per team (rotation noise)
             self.elo[home] += delta
             self.elo[away] -= delta
 
