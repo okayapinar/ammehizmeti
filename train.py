@@ -67,6 +67,7 @@ class Model:
             "playoffs": float(pre["playoffs"]),
             "total_centered": (pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0),
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
+            "wednesday": float(date.weekday() == 2),
             "early_season": float(self.season_games < 120),
             "series_game": float(self.series[frozenset((home, away))] + 1) if pre["playoffs"] else 0.0,
             "b2b_home": float(self.rest_days(home, date) <= 1),
@@ -77,7 +78,7 @@ class Model:
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "early_season", "series_game")}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "early_season", "series_game")}
 
     def predict(self, pre):
         x = self.features(pre)
