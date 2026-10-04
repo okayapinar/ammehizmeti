@@ -128,7 +128,8 @@ class Model:
         home_won = result["score_home"] > result["score_away"]
 
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - ELO_HOME_ADV) / 400))
-        delta = ELO_K * (int(home_won) - expected_home)
+        k = 30 if self.season_games <= ELO_WARMUP + 150 else ELO_K  # faster re-learning right after the warm-up
+        delta = k * (int(home_won) - expected_home)
         if not pre["playoffs"] and self.season_games > ELO_WARMUP:  # skip the first ~5 games per team (rotation noise)
             self.elo[home] += delta
             self.elo[away] -= delta
