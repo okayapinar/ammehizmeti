@@ -65,7 +65,7 @@ class Model:
             "spread_raw": pre["spread"] or 0.0,  # total model sees the uncapped line
             "total": pre["total"] or 0.0,
             "elo_edge": sgn * (self.elo[home] - self.elo[away]) / 100 * float(self.season_games > ELO_WARMUP),  # Elo features off while Elo is frozen
-            "elo_edge_vs_line": max(-3.0, min(3.0, sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3)) * float(self.season_games > ELO_WARMUP),  # no Elo disagreement signal while Elo is frozen  # extreme disagreement with the line is noise
+            "elo_edge_vs_line": max(-3.0, min(3.0, sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3)) * float(self.season_games > ELO_WARMUP),  # residual vs the line, clipped (extreme disagreement is noise), off while Elo is frozen
             "rest_edge": sgn * (self.rest_days(home, date) - self.rest_days(away, date)),
             "playoffs": float(pre["playoffs"]),
             "total_centered": 100 * ((pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0)) / (self.mean_total or pre["total"] or 1.0),
