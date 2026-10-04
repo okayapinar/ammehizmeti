@@ -20,7 +20,7 @@ LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.01
 
 
-NUMERIC = ("spread", "total", "total_centered", "elo_edge", "elo_edge_vs_line", "rest_edge", "series_game")
+NUMERIC = ("spread", "total", "total_centered", "tc_b2b_away", "elo_edge", "elo_edge_vs_line", "rest_edge", "series_game")
 GAINS = (0.9, 1.0, 1.1)
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
@@ -58,7 +58,7 @@ class Model:
         fav_home = pre["whos_favored"] == "home"
         sgn = 1 if fav_home else -1
         spread = pre["spread"] or 0.0
-        return {
+        x = {
             "fav_home": float(fav_home),
             "spread": spread,
             "total": pre["total"] or 0.0,
@@ -75,11 +75,13 @@ class Model:
             "b2b_away": float(self.rest_days(away, date) <= 1),
             "b2b_both": float(self.rest_days(home, date) <= 1 and self.rest_days(away, date) <= 1),
         }
+        x["tc_b2b_away"] = x["total_centered"] * x["b2b_away"]
+        return x
 
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "early_season", "series_game")}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "early_season", "series_game", "tc_b2b_away")}
 
     def predict(self, pre):
         x = self.features(pre)
