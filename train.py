@@ -8,7 +8,7 @@ autoresearch: AJANIN DEĞİŞTİRDİĞİ TEK DOSYA.
 """
 from collections import defaultdict
 
-from river import compose, linear_model, optim, preprocessing
+from river import linear_model, optim, preprocessing
 
 from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
 
@@ -29,7 +29,8 @@ TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
 class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
-        self.models = {t: [preprocessing.StandardScaler() | compose.FuncTransformer(self.gain_fn(g)) | linear_model.LogisticRegression(optim.SGD(lr)) for lr in LRS for g in GAINS] for t in TARGETS}
+        self.scalers = {t: preprocessing.StandardScaler() for t in TARGETS}
+        self.models = {t: [(g, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for g in GAINS] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_game = {}
         self.mean_total = None
@@ -84,10 +85,10 @@ class Model:
         x = self.features(pre)
         out = {}
         for target, models in self.models.items():
-            xt = self.view(x, target)
+            xs = self.scalers[target].transform_one(self.view(x, target))
             ps = []
-            for model in models:
-                proba = model.predict_proba_one(xt)
+            for g, model in models:
+                proba = model.predict_proba_one(self.gain_fn(g)(xs))
                 p0, p1 = proba.get(0, 0.0), proba.get(1, 0.0)
                 ps.append(p1 / (p0 + p1) if p0 + p1 > 0 else 0.5)
             ps = sorted(ps)[1:-1] if len(ps) > 4 else ps
@@ -99,9 +100,17 @@ class Model:
         for target, models in self.models.items():
             y = result[target]
             if y is not None and y != PUSH:
-                for model in models:
-                    model.learn_one(self.view(x, target), y)
+                xt = self.view(x, target)
+                self.scalers[target].learn_one(xt)
+                xs = self.scalers[target].transform_one(xt)
+                w = self.weight(pre, result, target)
+                for g, model in models:
+                    model.learn_one(self.gain_fn(g)(xs), y, w=w)
         self.update_state(pre, result)
+
+    @staticmethod
+    def weight(pre, result, target):
+        return 1.0
 
     def update_state(self, pre, result):
         if pre["season"] != self.season:
