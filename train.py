@@ -129,7 +129,7 @@ class Model:
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
 
-        hca = ELO_HOME_ADV + 25 if self.season_games <= ELO_WARMUP + 150 else ELO_HOME_ADV  # early-season home edge is larger
+        hca = ELO_HOME_ADV + 25 if self.season_games <= ELO_WARMUP + 250 else ELO_HOME_ADV  # early-season home edge is larger
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - hca) / 400))
         k = 30 if self.season_games <= ELO_WARMUP + 150 else ELO_K  # faster re-learning right after the warm-up
         delta = k * (int(home_won) - expected_home)
