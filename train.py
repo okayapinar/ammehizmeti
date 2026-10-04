@@ -90,7 +90,7 @@ class Model:
             self.season = pre["season"]
             self.season_games = 0
             for t in list(self.elo):
-                self.elo[t] = 0.75 * self.elo[t] + 0.25 * ELO_START
+                self.elo[t] = 0.65 * self.elo[t] + 0.35 * ELO_START
         self.season_games += 1
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
