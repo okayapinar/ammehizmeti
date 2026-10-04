@@ -120,7 +120,7 @@ class Model:
             self.season_games = 0
             self.series = defaultdict(int)
             for t in list(self.elo):
-                self.elo[t] = 0.65 * self.elo[t] + 0.35 * ELO_START
+                self.elo[t] = 0.60 * self.elo[t] + 0.40 * ELO_START
         self.season_games += 1
         if pre["playoffs"]:
             self.series[frozenset((pre["home"], pre["away"]))] += 1
