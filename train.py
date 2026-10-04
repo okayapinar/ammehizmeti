@@ -10,7 +10,7 @@ from collections import defaultdict
 
 from river import linear_model, optim, preprocessing
 
-from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
+from prepare import PUSH, TARGETS, evaluate, print_summary
 
 MAX_REST_DAYS = 20
 ELO_K = 20
@@ -20,7 +20,6 @@ LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.01
 
 
-NUMERIC = ("spread", "total", "total_centered", "tc_b2b_away", "elo_edge", "elo_edge_vs_line", "rest_edge", "series_game")
 EARLY_THRESHOLDS = (60, 120, 180)
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
@@ -28,7 +27,6 @@ TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
 
 class Model:
     def __init__(self):
-        self.team_to_division, self.team_to_conference = load_team_maps()
         self.scalers = {t: preprocessing.StandardScaler() for t in TARGETS}
         # the spread view has no early-season indicator, so one member per lr suffices there (identical to triplicates under a plain mean)
         self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in (EARLY_THRESHOLDS if t == "id_total" else EARLY_THRESHOLDS[:1])] for t in TARGETS}
@@ -107,17 +105,12 @@ class Model:
                 xt = self.view(x, target)
                 xs = self.scalers[target].transform_one(xt)  # same scaling as at predict time
                 self.scalers[target].learn_one(xt)
-                w = self.weight(pre, result, target)
                 for g, model in models:
                     xg = self.gain_fn(g)(xs)
                     # label smoothing: learn y with weight 0.9 and the opposite label with weight 0.1
-                    model.learn_one(xg, y, w=0.9 * w)
-                    model.learn_one(xg, 1 - y, w=0.1 * w)
+                    model.learn_one(xg, y, w=0.9)
+                    model.learn_one(xg, 1 - y, w=0.1)
         self.update_state(pre, result)
-
-    @staticmethod
-    def weight(pre, result, target):
-        return 1.0
 
     def update_state(self, pre, result):
         if pre["season"] != self.season:
