@@ -109,8 +109,9 @@ class Model:
 
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - ELO_HOME_ADV) / 400))
         delta = ELO_K * (int(home_won) - expected_home)
-        self.elo[home] += delta
-        self.elo[away] -= delta
+        if not pre["playoffs"]:
+            self.elo[home] += delta
+            self.elo[away] -= delta
 
         if pre["total"]:
             self.mean_total = pre["total"] if self.mean_total is None else self.mean_total + LINE_ALPHA * (pre["total"] - self.mean_total)
