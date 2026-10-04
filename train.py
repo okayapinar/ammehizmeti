@@ -65,7 +65,7 @@ class Model:
             "elo_edge_vs_line": sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3,
             "rest_edge": sgn * (self.rest_days(home, date) - self.rest_days(away, date)),
             "playoffs": float(pre["playoffs"]),
-            "total_centered": (pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0),
+            "total_centered": 100 * ((pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0)) / (self.mean_total or pre["total"] or 1.0),
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
             "wednesday": float(date.weekday() == 2),
             "early_season": float(self.season_games < 120),
