@@ -72,7 +72,7 @@ class Model:
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
             "wednesday": float(date.weekday() == 2),
             **{f"early_{thr}": float(self.season_games < thr) for thr in EARLY_THRESHOLDS},
-            "series_game": float(min(self.series[frozenset((home, away))] + 1, 5)) if pre["playoffs"] else 0.0,
+            "series_game": float(min(self.series[frozenset((home, away))] + 1, 4)) if pre["playoffs"] else 0.0,
             "b2b_home": float(self.rest_days(home, date) <= 1),
             "b2b_away": float(self.rest_days(away, date) <= 1),
             "b2b_both": float(self.rest_days(home, date) <= 1 and self.rest_days(away, date) <= 1),
