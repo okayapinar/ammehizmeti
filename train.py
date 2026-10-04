@@ -78,12 +78,13 @@ class Model:
             "b2b_both": float(self.rest_days(home, date) <= 1 and self.rest_days(away, date) <= 1),
         }
         x["tc_b2b_away"] = x["total_centered"] * x["b2b_away"]
+        x["playoff_saturday"] = float(pre["playoffs"] and date.weekday() == 5)
         return x
 
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "series_game", "tc_b2b_away", *(f"early_{thr}" for thr in EARLY_THRESHOLDS))}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "series_game", "tc_b2b_away", "playoff_saturday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS))}
 
     def predict(self, pre):
         x = self.features(pre)
