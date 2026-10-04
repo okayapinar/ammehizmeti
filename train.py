@@ -16,9 +16,7 @@ MAX_REST_DAYS = 20
 ELO_K = 20
 ELO_START = 1500
 LRS = (0.003, 0.005, 0.008)
-AVG_START = 2000
 LINE_ALPHA = 0.01
-BIAS_ALPHA = 0.02
 
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge")
@@ -27,12 +25,11 @@ TOTAL_DROP = ("elo_edge_vs_line", "rest_edge")
 class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
-        self.models = {t: [preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.Averager(optim.SGD(lr), start=AVG_START)) for lr in LRS] for t in TARGETS}
+        self.models = {t: [preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.SGD(lr)) for lr in LRS] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_win = {}
         self.last_game = {}
         self.mean_total = None
-        self.over_bias = 0.0
         self.season = None
 
     def rest_days(self, team, date):
@@ -54,13 +51,12 @@ class Model:
             "rest_edge": sgn * (self.rest_days(home, date) - self.rest_days(away, date)),
             "playoffs": float(pre["playoffs"]),
             "total_centered": (pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0),
-            "over_bias": self.over_bias,
         }
 
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "over_bias")}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered")}
 
     def predict(self, pre):
         x = self.features(pre)
@@ -99,7 +95,6 @@ class Model:
 
         if pre["total"]:
             self.mean_total = pre["total"] if self.mean_total is None else self.mean_total + LINE_ALPHA * (pre["total"] - self.mean_total)
-            self.over_bias += BIAS_ALPHA * ((result["score_home"] + result["score_away"] - pre["total"]) - self.over_bias)
 
         self.last_win[home] = home_won
         self.last_win[away] = not home_won
