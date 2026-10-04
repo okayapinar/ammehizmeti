@@ -90,6 +90,7 @@ class Model:
                 proba = model.predict_proba_one(xt)
                 p0, p1 = proba.get(0, 0.0), proba.get(1, 0.0)
                 ps.append(p1 / (p0 + p1) if p0 + p1 > 0 else 0.5)
+            ps = sorted(ps)[1:-1] if len(ps) > 4 else ps
             out[target] = sum(ps) / len(ps)
         return out
 
