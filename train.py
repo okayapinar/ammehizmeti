@@ -106,6 +106,8 @@ class Model:
             if y is not None and y != PUSH:
                 xt = self.view(x, target)
                 xs = self.scalers[target].transform_one(xt)  # same scaling as at predict time
+                if target == "id_spread" and self.season_games <= ELO_WARMUP:
+                    xt = {k: v for k, v in xt.items() if k not in ("elo_edge", "elo_edge_vs_line")}  # zeroed Elo features do not shape the scaler
                 self.scalers[target].learn_one(xt)
                 for g, model in models:
                     xg = self.gain_fn(g)(xs)
