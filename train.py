@@ -27,7 +27,6 @@ class Model:
         self.team_to_division, self.team_to_conference = load_team_maps()
         self.models = {t: [preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.SGD(lr)) for lr in LRS] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
-        self.last_win = {}
         self.last_game = {}
         self.mean_total = None
         self.season = None
@@ -97,8 +96,6 @@ class Model:
         if pre["total"]:
             self.mean_total = pre["total"] if self.mean_total is None else self.mean_total + LINE_ALPHA * (pre["total"] - self.mean_total)
 
-        self.last_win[home] = home_won
-        self.last_win[away] = not home_won
         self.last_game[home] = pre["date"]
         self.last_game[away] = pre["date"]
 
