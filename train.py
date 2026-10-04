@@ -93,7 +93,7 @@ class Model:
             for g, model in models:
                 proba = model.predict_proba_one(self.gain_fn(g)(xs))
                 p0, p1 = proba.get(0, 0.0), proba.get(1, 0.0)
-                ps.append(p1 / (p0 + p1) if p0 + p1 > 0 else 0.5)
+                ps.append(min(max(p1 / (p0 + p1) if p0 + p1 > 0 else 0.5, 0.4), 0.6))  # member probabilities clipped
             out[target] = sum(ps) / len(ps)
         return out
 
