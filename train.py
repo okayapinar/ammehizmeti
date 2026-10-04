@@ -21,7 +21,7 @@ LINE_ALPHA = 0.01
 
 
 NUMERIC = ("spread", "total", "total_centered", "tc_b2b_away", "elo_edge", "elo_edge_vs_line", "rest_edge", "series_game")
-EARLY_THRESHOLDS = (90, 120, 150)
+EARLY_THRESHOLDS = (60, 120, 180)
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
 
