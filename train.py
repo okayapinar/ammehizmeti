@@ -109,12 +109,9 @@ class Model:
                 w = self.weight(pre, result, target)
                 for g, model in models:
                     xg = self.gain_fn(g)(xs)
-                    if target == "id_total":
-                        # label smoothing: learn y with weight 0.9 and the opposite label with weight 0.1
-                        model.learn_one(xg, y, w=0.9 * w)
-                        model.learn_one(xg, 1 - y, w=0.1 * w)
-                    else:
-                        model.learn_one(xg, y, w=w)
+                    # label smoothing: learn y with weight 0.9 and the opposite label with weight 0.1
+                    model.learn_one(xg, y, w=0.9 * w)
+                    model.learn_one(xg, 1 - y, w=0.1 * w)
         self.update_state(pre, result)
 
     @staticmethod
