@@ -22,7 +22,7 @@ LINE_ALPHA = 0.011
 
 EARLY_THRESHOLDS = (60, 120, 190)
 
-TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
+TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge", "spread")
 
 
 class Model:
@@ -61,6 +61,7 @@ class Model:
         x = {
             "fav_home": float(fav_home),
             "spread": spread,
+            "spread_raw": pre["spread"] or 0.0,  # total model sees the uncapped line
             "total": pre["total"] or 0.0,
             "elo_edge": sgn * (self.elo[home] - self.elo[away]) / 100,
             "elo_edge_vs_line": sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3,
@@ -82,7 +83,7 @@ class Model:
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "series_game", "tc_b2b_away", "playoff_saturday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS))}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "spread_raw", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "series_game", "tc_b2b_away", "playoff_saturday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS))}
 
     def predict(self, pre):
         x = self.features(pre)
