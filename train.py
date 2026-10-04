@@ -21,7 +21,7 @@ LINE_ALPHA = 0.01
 
 
 NUMERIC = ("spread", "total", "total_centered", "tc_b2b_away", "elo_edge", "elo_edge_vs_line", "rest_edge", "series_game")
-GAINS = (0.9, 1.0, 1.1)
+EARLY_THRESHOLDS = (90, 120, 150)
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
 
@@ -30,7 +30,7 @@ class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
         self.scalers = {t: preprocessing.StandardScaler() for t in TARGETS}
-        self.models = {t: [(g, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for g in GAINS] for t in TARGETS}
+        self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in EARLY_THRESHOLDS] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_game = {}
         self.mean_total = None
@@ -39,8 +39,9 @@ class Model:
         self.series = defaultdict(int)
 
     @staticmethod
-    def gain_fn(g):
-        return lambda x: {k: (v if k in NUMERIC else v * g) for k, v in x.items()}
+    def gain_fn(thr):
+        # each member sees a single early-season indicator (its own threshold)
+        return lambda x: {("early_season" if k == f"early_{thr}" else k): v for k, v in x.items() if not (k.startswith("early_") and k != f"early_{thr}")}
 
     def rest_days(self, team, date):
         if team not in self.last_game:
@@ -69,7 +70,7 @@ class Model:
             "total_centered": 100 * ((pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0)) / (self.mean_total or pre["total"] or 1.0),
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
             "wednesday": float(date.weekday() == 2),
-            "early_season": float(self.season_games < 120),
+            **{f"early_{thr}": float(self.season_games < thr) for thr in EARLY_THRESHOLDS},
             "series_game": float(self.series[frozenset((home, away))] + 1) if pre["playoffs"] else 0.0,
             "b2b_home": float(self.rest_days(home, date) <= 1),
             "b2b_away": float(self.rest_days(away, date) <= 1),
@@ -81,7 +82,7 @@ class Model:
     def view(self, x, target):
         if target == "id_total":
             return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "early_season", "series_game", "tc_b2b_away")}
+        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "series_game", "tc_b2b_away", *(f"early_{thr}" for thr in EARLY_THRESHOLDS))}
 
     def predict(self, pre):
         x = self.features(pre)
