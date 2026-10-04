@@ -30,7 +30,8 @@ class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
         self.scalers = {t: preprocessing.StandardScaler() for t in TARGETS}
-        self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in EARLY_THRESHOLDS] for t in TARGETS}
+        # the spread view has no early-season indicator, so one member per lr suffices there (identical to triplicates under a plain mean)
+        self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in (EARLY_THRESHOLDS if t == "id_total" else EARLY_THRESHOLDS[:1])] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_game = {}
         self.mean_total = None
