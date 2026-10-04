@@ -8,7 +8,7 @@ autoresearch: AJANIN DEĞİŞTİRDİĞİ TEK DOSYA.
 """
 from collections import defaultdict
 
-from river import linear_model, optim, preprocessing
+from river import compose, linear_model, optim, preprocessing
 
 from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
 
@@ -20,19 +20,26 @@ LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.01
 
 
+NUMERIC = ("spread", "total", "total_centered", "elo_edge", "elo_edge_vs_line", "rest_edge", "series_game")
+GAINS = (0.9, 1.0, 1.1)
+
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge")
 
 
 class Model:
     def __init__(self):
         self.team_to_division, self.team_to_conference = load_team_maps()
-        self.models = {t: [preprocessing.StandardScaler() | linear_model.LogisticRegression(optim.SGD(lr)) for lr in LRS] for t in TARGETS}
+        self.models = {t: [preprocessing.StandardScaler() | compose.FuncTransformer(self.gain_fn(g)) | linear_model.LogisticRegression(optim.SGD(lr)) for lr in LRS for g in GAINS] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_game = {}
         self.mean_total = None
         self.season = None
         self.season_games = 0
         self.series = defaultdict(int)
+
+    @staticmethod
+    def gain_fn(g):
+        return lambda x: {k: (v if k in NUMERIC else v * g) for k, v in x.items()}
 
     def rest_days(self, team, date):
         if team not in self.last_game:
