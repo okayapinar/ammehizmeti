@@ -104,8 +104,8 @@ class Model:
             y = result[target]
             if y is not None and y != PUSH:
                 xt = self.view(x, target)
+                xs = self.scalers[target].transform_one(xt)  # same scaling as at predict time
                 self.scalers[target].learn_one(xt)
-                xs = self.scalers[target].transform_one(xt)
                 w = self.weight(pre, result, target)
                 for g, model in models:
                     xg = self.gain_fn(g)(xs)
