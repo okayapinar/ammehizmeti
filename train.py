@@ -15,6 +15,7 @@ from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
 MAX_REST_DAYS = 20
 ELO_K = 20
 ELO_START = 1500
+ELO_HOME_ADV = 70
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.01
 
@@ -95,7 +96,7 @@ class Model:
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
 
-        expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home]) / 400))
+        expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - ELO_HOME_ADV) / 400))
         delta = ELO_K * (int(home_won) - expected_home)
         self.elo[home] += delta
         self.elo[away] -= delta
