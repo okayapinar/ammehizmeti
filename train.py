@@ -108,8 +108,8 @@ class Model:
                 for g, model in models:
                     xg = self.gain_fn(g)(xs)
                     # label smoothing: learn y with weight 0.9 and the opposite label with weight 0.1
-                    model.learn_one(xg, y, w=0.9)
-                    model.learn_one(xg, 1 - y, w=0.1)
+                    model.learn_one(xg, y, w=0.88)
+                    model.learn_one(xg, 1 - y, w=0.12)
         self.update_state(pre, result)
 
     def update_state(self, pre, result):
