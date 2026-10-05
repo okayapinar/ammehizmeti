@@ -92,16 +92,18 @@ class Model:
         elo_diff = self.elo[home] - self.elo[away]
         elo_on = float(self.season_games > ELO_WARMUP)  # Elo features are off while Elo is frozen
         rest_home, rest_away = self.rest_days(home, date), self.rest_days(away, date)
+        total = pre["total"] or 0.0
+        line_level = self.mean_total or total  # league line level (the first game is its own level)
         x = {
             "fav_home": float(fav_home),
             "spread": spread,
             "spread_raw": pre["spread"] or 0.0,  # total model sees the uncapped line
-            "total": min(pre["total"] or 0.0, TOTAL_CAP),
+            "total": min(total, TOTAL_CAP),
             "elo_edge": sgn * elo_diff / 100 * elo_on,
             "elo_edge_vs_line": max(VS_LINE_FLOOR, sgn * elo_diff / 100 - spread / 3) * elo_on,  # Elo edge minus the line (1 point ~ 33 Elo)
             "rest_edge": sgn * (rest_home - rest_away),
             "playoffs": float(pre["playoffs"]),
-            "total_centered": 100 * ((pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0)) / (self.mean_total or pre["total"] or 1.0),
+            "total_centered": 100 * (total - line_level) / (line_level or 1.0),  # percent deviation from the league line level
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
             "wednesday": float(date.weekday() == 2),
             **{f"early_{thr}": float(self.season_games < thr) for thr in EARLY_THRESHOLDS},
