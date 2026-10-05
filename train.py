@@ -113,7 +113,7 @@ class Model:
         self.segment_reg, self.segment_reg_season = {}, None
         self.venue_lines = {}  # (season, team) -> its last regular-season game's venue-adjusted line
         self.line_errors = defaultdict(list)  # (season, team) -> its regular-season line errors (margin minus line-implied margin)
-        self.last_ot = {}  # (season, team) -> its last regular-season game's (overtime result +-1 or 0, line error, line error minus OT margin)
+        self.last_ot = {}  # (season, team) -> whether its last regular-season game went to overtime
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
         self.routed = {}
@@ -281,7 +281,7 @@ class Model:
             segs.append("ats_streak")
         if any(abs(move) >= LINE_CHASE_MOVE and move * err > 0 for move, err in (self.line_chase(pre, fav), self.line_chase(pre, dog))):
             segs.append("line_chase")  # a line that chased a team's last result by 12+ points
-        if self.prev_ot(pre, fav)[0] or self.prev_ot(pre, dog)[0]:
+        if self.last_ot.get((pre["season"], fav)) or self.last_ot.get((pre["season"], dog)):
             segs.append("prev_ot")  # a team's previous game went to overtime
         return segs
 
@@ -303,18 +303,13 @@ class Model:
             return sum(e)
         return 0.0
 
-    def prev_ot(self, pre, team):
-        # the team's previous regular-season game this season: (overtime result +-1 or 0, line error, regulation line error)
-        return self.last_ot.get((pre["season"], team), (0.0, 0.0, 0.0))
-
     def segment_context(self, pre, x, seg):
         # line, venue, total level and rest (spread: per side; total: the shorter rest and the favourite's rest edge)
         fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
         rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
         if SEGMENTS[seg][0] == "id_spread":
             extra = {"ats_streak": [self.ats_streak(pre, fav), self.ats_streak(pre, dog)],
-                     "line_chase": [*self.line_chase(pre, fav), *self.line_chase(pre, dog)],
-                     "prev_ot": [*self.prev_ot(pre, fav), *self.prev_ot(pre, dog)]}.get(seg, [])
+                     "line_chase": [*self.line_chase(pre, fav), *self.line_chase(pre, dog)]}.get(seg, [])
             return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
         return [x["fav_home"], x["spread"], x["total_centered"], x["total"], min(rest_fav, rest_dog), rest_fav - rest_dog]
 
@@ -414,11 +409,8 @@ class Model:
             self.line_errors[(pre["season"], pre["away"])].append(-errors["id_spread"] if pre["whos_favored"] == "home" else errors["id_spread"])
             for team in (pre["home"], pre["away"]):
                 self.venue_lines[(pre["season"], team)] = self.venue_line(pre, team)
-            ot_margin = (result["ot_home"] or 0) - (result["ot_away"] or 0)
-            overtime = (result["ot_home"] or 0) + (result["ot_away"] or 0) > 0
-            for team, sign in ((pre["home"], 1), (pre["away"], -1)):
-                e = self.line_errors[(pre["season"], team)][-1]
-                self.last_ot[(pre["season"], team)] = (float(np.sign(sign * ot_margin)) if overtime else 0.0, e, e - sign * ot_margin)
+            for team in (pre["home"], pre["away"]):
+                self.last_ot[(pre["season"], team)] = (result["ot_home"] or 0) + (result["ot_away"] or 0) > 0
 
         self.update_state(pre, result)
 
