@@ -89,7 +89,6 @@ class Model:
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
         self.routed = {}
-        self.playoff_models = {"id_total": linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["playoff"]))}  # learn playoff games only (the playoff spread comes from the ridge)
         self.late_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["late"])) for t in TARGETS}  # learn late regular-season games only
 
     @staticmethod
@@ -189,7 +188,7 @@ class Model:
 
     def expert(self, pre, target, late_from):
         # phase expert for this game: playoff-only model, late regular-season model, or none
-        experts = {"playoff": self.playoff_models, "late": self.late_models}.get(self.phase(pre, target, late_from))
+        experts = {"late": self.late_models}.get(self.phase(pre, target, late_from))
         return experts.get(target) if experts else None
 
     def predict(self, pre):
