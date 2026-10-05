@@ -30,11 +30,10 @@ LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 EARLY_THRESHOLDS = (60, 120, 190)
 SMOOTH_LABEL_W, SMOOTH_FLIP_W = 0.88, 0.12  # label smoothing: weight of the observed label and of the opposite label
-# phase experts: league game after which the late-season expert votes / learns, per target
+# late-season expert: league game after which the late-season expert votes / learns, per target
 LATE_PREDICT_FROM = {"id_total": 1000, "id_spread": 1150}
 LATE_LEARN_FROM = {"id_total": 950, "id_spread": 1150}
-EXPERT_LRS = {"playoff": 0.006, "late": 0.0065}
-PLAYOFF_BASE_WEIGHT = 0.45  # playoff games: 0.45 * ensemble + 0.5 * expert (weights sum to 0.95, a mild shrink toward 0)
+LATE_EXPERT_LR = 0.0065
 SPREAD_CAP, TOTAL_CAP = 19.0, 250.0  # line caps for the model features (spread_raw keeps the uncapped spread)
 SERIES_CAP = 4  # playoff series game number is capped (games 4+ look alike)
 PLAY_IN_SERIES = 0.7  # series_game code for play-in games
@@ -63,7 +62,7 @@ def learn_smoothed(model, x, y):
 
 
 class Model:
-    """Online logistic ensembles per target (spread: Elo vs the line; total: schedule context vs the line) plus playoff / late-season experts."""
+    """Online logistic ensembles per target (spread: Elo vs the line; total: schedule context vs the line) plus a late-season expert and playoff line-error ridges."""
 
     def __init__(self):
         self.scalers = {t: preprocessing.StandardScaler() for t in TARGETS}
@@ -89,7 +88,7 @@ class Model:
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
         self.routed = {}
-        self.late_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["late"])) for t in TARGETS}  # learn late regular-season games only
+        self.late_models = {t: linear_model.LogisticRegression(optim.SGD(LATE_EXPERT_LR)) for t in TARGETS}  # learn late regular-season games only
 
     @staticmethod
     def early_view(x, thr):
@@ -98,7 +97,7 @@ class Model:
         return {("early_season" if k == own else k): v for k, v in x.items() if k == own or not k.startswith("early_")}
 
     def expert_view(self, xs):
-        # phase experts see the middle early-season indicator
+        # the late expert sees the middle early-season indicator
         return self.early_view(xs, EARLY_THRESHOLDS[1])
 
     def rest_days(self, team, date):
@@ -187,9 +186,8 @@ class Model:
         return "early" if self.season_games < EARLY_THRESHOLDS[1] else "main"
 
     def expert(self, pre, target, late_from):
-        # phase expert for this game: playoff-only model, late regular-season model, or none
-        experts = {"late": self.late_models}.get(self.phase(pre, target, late_from))
-        return experts.get(target) if experts else None
+        # the late regular-season expert for late games, else None
+        return self.late_models[target] if self.phase(pre, target, late_from) == "late" else None
 
     def predict(self, pre):
         x = self.features(pre)
@@ -199,10 +197,8 @@ class Model:
             ps = [model.predict_proba_one(self.early_view(xs, g)).get(1, 0.5) for g, model in models]
             out[target] = sum(ps) / len(ps)
             expert = self.expert(pre, target, LATE_PREDICT_FROM)
-            if expert is not None:  # blend: 0.5 * expert plus 0.5 (late) or PLAYOFF_BASE_WEIGHT (playoffs) * ensemble
-                pe = expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
-                base_weight = PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5
-                out[target] = base_weight * out[target] + 0.5 * pe
+            if expert is not None:  # 50/50 blend with the late expert
+                out[target] = 0.5 * out[target] + 0.5 * expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
         if pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
             self.playoff_lines(pre, x, out)
         self.route(pre, out)
