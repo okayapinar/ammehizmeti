@@ -120,9 +120,9 @@ class Model:
         return 1 + sum(w - l > wins - losses for w, l in mates)
 
     def bubble(self, team):
-        # a playoff-bubble team (seeds 7-9, 7-10 since the play-in)
+        # a playoff-bubble team (seeds 7-10)
         rank = self.late_rank(team)
-        return rank is not None and 7 <= rank <= (10 if self.season >= 2021 else 9)
+        return rank is not None and 7 <= rank <= 10
 
     def lottery(self, team):
         # out of the playoff picture (below seed 8, seed 10 since the play-in)
