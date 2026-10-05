@@ -17,6 +17,10 @@ ELO_K = 20.5
 ELO_START = 1500
 ELO_HOME_ADV = 55
 ELO_WARMUP = 75  # league games per season before Elo is updated or used (~5 games per team)
+ELO_REGRESS = 0.40  # share of each rating pulled back to ELO_START at a new season
+ELO_CATCHUP = (150, 29.75)  # (league games after the warm-up, K) - faster re-learning right after the warm-up
+ELO_EARLY = 275  # league games after the warm-up with a larger home edge (+25) and boosted toss-up updates
+ELO_WINTER_HCA = -5  # home-edge change in January and February
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 EARLY_THRESHOLDS = (60, 120, 190)
@@ -146,18 +150,19 @@ class Model:
             self.season_games = 0
             self.series = defaultdict(int)
             for t in list(self.elo):
-                self.elo[t] = 0.60 * self.elo[t] + 0.40 * ELO_START
+                self.elo[t] = (1 - ELO_REGRESS) * self.elo[t] + ELO_REGRESS * ELO_START
         self.season_games += 1
         if pre["playoffs"]:
             self.series[frozenset((pre["home"], pre["away"]))] += 1
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
 
-        hca = ELO_HOME_ADV + 25 if self.season_games <= ELO_WARMUP + 275 else (ELO_HOME_ADV - 5 if pre["date"].month in (1, 2) else ELO_HOME_ADV)  # early-season home edge is larger
+        early = self.season_games <= ELO_WARMUP + ELO_EARLY
+        hca = ELO_HOME_ADV + (25 if early else (ELO_WINTER_HCA if pre["date"].month in (1, 2) else 0))
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - hca) / 400))
-        k = 29.75 if self.season_games <= ELO_WARMUP + 150 else ELO_K  # faster re-learning right after the warm-up
+        k = ELO_CATCHUP[1] if self.season_games <= ELO_WARMUP + ELO_CATCHUP[0] else ELO_K
         delta = k * (int(home_won) - expected_home)
-        if self.season_games <= ELO_WARMUP + 275 and abs(self.elo[home] - self.elo[away]) < 50:
+        if early and abs(self.elo[home] - self.elo[away]) < 50:
             delta *= 1.16  # early toss-ups separate similar teams
         if not pre["playoffs"] and self.season_games > ELO_WARMUP:  # skip the first ~5 games per team (rotation noise)
             self.elo[home] += delta
