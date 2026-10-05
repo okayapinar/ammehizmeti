@@ -211,6 +211,8 @@ class Model:
         self.last_game[pre["away"]] = pre["date"]
 
     def update_elo(self, pre, result):
+        if pre["playoffs"] or self.season_games <= ELO_WARMUP:  # no playoff updates; skip the first ~5 games per team (rotation noise)
+            return
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
         early = self.season_games <= ELO_WARMUP + ELO_EARLY
@@ -220,9 +222,8 @@ class Model:
         delta = k * (int(home_won) - expected_home)
         if early and abs(self.elo[home] - self.elo[away]) < ELO_TOSSUP[0]:
             delta *= ELO_TOSSUP[1]
-        if not pre["playoffs"] and self.season_games > ELO_WARMUP:  # skip the first ~5 games per team (rotation noise)
-            self.elo[home] += delta
-            self.elo[away] -= delta
+        self.elo[home] += delta
+        self.elo[away] -= delta
 
 
 if __name__ == "__main__":
