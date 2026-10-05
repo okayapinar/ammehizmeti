@@ -134,20 +134,17 @@ class Model:
         keep = TOTAL_FEATURES if target == "id_total" else SPREAD_FEATURES
         return {k: v for k, v in x.items() if k in keep}
 
-    def phase(self, pre, target):
+    def phase(self, pre, target, late_from=LATE_PREDICT_FROM):
         if pre["playoffs"]:
             return "playoff"
-        if pre["regular"] and self.season_games > LATE_PREDICT_FROM[target]:
+        if pre["regular"] and self.season_games > late_from[target]:
             return "late"
         return "early" if self.season_games < EARLY_THRESHOLDS[1] else "main"
 
-    def expert(self, pre, target, start):
+    def expert(self, pre, target, late_from):
         # phase expert for this game: playoff-only model, late regular-season model, or none
-        if pre["playoffs"]:
-            return self.playoff_models[target]
-        if pre["regular"] and self.season_games > start[target]:
-            return self.late_models[target]
-        return None
+        experts = {"playoff": self.playoff_models, "late": self.late_models}.get(self.phase(pre, target, late_from))
+        return experts[target] if experts else None
 
     def predict(self, pre):
         x = self.features(pre)
