@@ -11,7 +11,7 @@ from collections import defaultdict
 
 from river import linear_model, optim, preprocessing
 
-from prepare import PUSH, TARGETS, evaluate, print_summary
+from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
 
 MAX_REST_DAYS = 20
 ELO_K = 20.5
@@ -37,6 +37,9 @@ SPREAD_CAP, TOTAL_CAP = 19.0, 250.0  # line caps for the model features (spread_
 SERIES_CAP = 4  # playoff series game number is capped (games 4+ look alike)
 PLAY_IN_SERIES = 0.7  # series_game code for play-in games
 VS_LINE_FLOOR = -3.0  # elo_edge_vs_line floor (the upper side never binds)
+CONFERENCE = load_team_maps()[1]
+SEASON_LENGTH = {2012: 66, 2020: 72, 2021: 72}  # shortened seasons (lockout, pandemic); 82 games otherwise
+STAKES_FROM = 60  # team games played before the standings define a playoff-bubble team
 TEMPERATURE_LR, TEMPERATURE_MIN = 0.01, 0.05  # online calibration slope on the final logit
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
@@ -74,6 +77,9 @@ class Model:
         self.season = None
         self.season_games = 0
         self.series = defaultdict(int)
+        self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
+        self.bubble_rate = [1.0, 2.0]  # bubble-side covers, bubble games (running cover rate of the bubble team)
+        self.routed = {}
         self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["playoff"])) for t in TARGETS}  # learn playoff games only
         self.late_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["late"])) for t in TARGETS}  # learn late regular-season games only
 
@@ -104,6 +110,21 @@ class Model:
         if pre["playoffs"]:
             return float(min(self.series[frozenset((pre["home"], pre["away"]))] + 1, SERIES_CAP))
         return 0.0 if pre["regular"] else PLAY_IN_SERIES
+
+    def bubble(self, team):
+        # late season: a playoff-bubble team (seeds 7-9, 7-10 since the play-in) that has neither clinched nor been eliminated
+        wins, losses = self.record[team]
+        length = SEASON_LENGTH.get(self.season, 82)
+        left = length - wins - losses
+        if wins + losses < STAKES_FROM or left <= 0:
+            return False
+        mates = [(w, l) for t, (w, l) in self.record.items() if t != team and CONFERENCE.get(t) == CONFERENCE.get(team)]
+        rank = 1 + sum(w - l > wins - losses for w, l in mates)
+        play_in = self.season >= 2021
+        direct, last_in = (6, 10) if play_in else (8, 8)
+        clinched = sum(w + (length - w - l) >= wins for w, l in mates) < direct
+        eliminated = sum(w > wins + left for w, l in mates) >= last_in
+        return 7 <= rank <= (10 if play_in else 9) and not clinched and not eliminated
 
     def features(self, pre):
         home, away, date = pre["home"], pre["away"], pre["date"]
@@ -167,7 +188,19 @@ class Model:
                 pe = expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
                 base_weight = PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5
                 out[target] = base_weight * out[target] + 0.5 * pe
+        self.route_bubble(pre, out)
         return self.calibrate(pre, out)
+
+    def route_bubble(self, pre, out):
+        # spread: exactly one playoff-bubble team -> pick its side with the running bubble cover rate
+        side = 0
+        if pre["regular"] and not pre["playoffs"]:
+            fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
+            side = int(self.bubble(fav)) - int(self.bubble(dog))
+        self.routed[self.game_key(pre)] = side
+        if side:
+            rate = self.bubble_rate[0] / self.bubble_rate[1]
+            out["id_spread"] = rate if side > 0 else 1 - rate
 
     @staticmethod
     def game_key(pre):
@@ -199,6 +232,10 @@ class Model:
     def learn(self, pre, result):
         x = self.features(pre)
         self.learn_temperature(pre, result)
+        side = self.routed.pop(self.game_key(pre), 0)
+        if side and result["id_spread"] in (0, 1):
+            self.bubble_rate[0] += float((result["id_spread"] == 1) == (side > 0))
+            self.bubble_rate[1] += 1
         for target, models in self.models.items():
             y = result[target]
             if y is not None and y != PUSH:
@@ -220,11 +257,16 @@ class Model:
             self.season = pre["season"]
             self.season_games = 0
             self.series = defaultdict(int)
+            self.record = defaultdict(lambda: [0, 0])
             for t in list(self.elo):
                 self.elo[t] = (1 - ELO_REGRESS) * self.elo[t] + ELO_REGRESS * ELO_START
         self.season_games += 1
         if pre["playoffs"]:
             self.series[frozenset((pre["home"], pre["away"]))] += 1
+        elif pre["regular"]:
+            home_won = result["score_home"] > result["score_away"]
+            self.record[pre["home"]][0 if home_won else 1] += 1
+            self.record[pre["away"]][1 if home_won else 0] += 1
         self.update_elo(pre, result)
         if pre["total"]:
             self.mean_total = pre["total"] if self.mean_total is None else self.mean_total + LINE_ALPHA * (pre["total"] - self.mean_total)
