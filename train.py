@@ -92,6 +92,12 @@ class Model:
             return True
         return date.month == 1 and date.weekday() == 0 and 15 <= date.day <= 21
 
+    def series_game(self, pre):
+        # playoff series game number (capped), a fixed code for play-in games, 0 in the regular season
+        if pre["playoffs"]:
+            return float(min(self.series[frozenset((pre["home"], pre["away"]))] + 1, SERIES_CAP))
+        return 0.0 if pre["regular"] else PLAY_IN_SERIES
+
     def features(self, pre):
         home, away, date = pre["home"], pre["away"], pre["date"]
         fav_home = pre["whos_favored"] == "home"
@@ -115,7 +121,7 @@ class Model:
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
             "wednesday": float(date.weekday() == 2),
             **{f"early_{thr}": float(self.season_games < thr) for thr in EARLY_THRESHOLDS},
-            "series_game": float(min(self.series[frozenset((home, away))] + 1, SERIES_CAP)) if pre["playoffs"] else (PLAY_IN_SERIES if not pre["regular"] else 0.0),
+            "series_game": self.series_game(pre),
             "b2b_home": float(rest_home <= 1),
             "b2b_away": float(rest_away <= 1),
             "b2b_both": float(rest_home <= 1 and rest_away <= 1),
