@@ -13,10 +13,10 @@ from river import linear_model, optim, preprocessing
 from prepare import PUSH, TARGETS, evaluate, print_summary
 
 MAX_REST_DAYS = 20
-ELO_K = 20.0
+ELO_K = 20.5
 ELO_START = 1500
 ELO_HOME_ADV = 55
-ELO_WARMUP = 74  # league games per season before Elo is updated or used (~5 games per team)
+ELO_WARMUP = 75  # league games per season before Elo is updated or used (~5 games per team)
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 
