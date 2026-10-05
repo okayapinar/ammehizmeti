@@ -59,7 +59,7 @@ class Model:
         self.late_models = {t: linear_model.LogisticRegression(optim.SGD(0.0065)) for t in TARGETS}  # learn late regular-season games only
 
     @staticmethod
-    def gain_fn(thr):
+    def early_view(thr):
         # each member sees a single early-season indicator (its own threshold)
         return lambda x: {("early_season" if k == f"early_{thr}" else k): v for k, v in x.items() if not (k.startswith("early_") and k != f"early_{thr}")}
 
@@ -121,11 +121,11 @@ class Model:
         out = {}
         for target, models in self.models.items():
             xs = self.scalers[target].transform_one(self.view(x, target))
-            ps = [clip(model.predict_proba_one(self.gain_fn(g)(xs)).get(1, 0.5)) for g, model in models]
+            ps = [clip(model.predict_proba_one(self.early_view(g)(xs)).get(1, 0.5)) for g, model in models]
             out[target] = sum(ps) / len(ps)
             expert = self.expert(pre, target, LATE_PREDICT_FROM)
             if expert is not None:  # half from the phase expert (the playoff blend keeps the base's 0.45 weight)
-                pe = clip(expert.predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5))
+                pe = clip(expert.predict_proba_one(self.early_view(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5))
                 out[target] = (0.45 if pre["playoffs"] else 0.5) * out[target] + 0.5 * pe
         return out
 
@@ -140,10 +140,10 @@ class Model:
                     xt = {k: v for k, v in xt.items() if k not in ("elo_edge", "elo_edge_vs_line")}  # zeroed Elo features do not shape the scaler
                 self.scalers[target].learn_one(xt)
                 for g, model in models:
-                    learn_smoothed(model, self.gain_fn(g)(xs), y)
+                    learn_smoothed(model, self.early_view(g)(xs), y)
                 expert = self.expert(pre, target, LATE_LEARN_FROM)
                 if expert is not None:
-                    learn_smoothed(expert, self.gain_fn(EARLY_THRESHOLDS[1])(xs), y)
+                    learn_smoothed(expert, self.early_view(EARLY_THRESHOLDS[1])(xs), y)
 
         self.update_state(pre, result)
 
