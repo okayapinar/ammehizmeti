@@ -9,7 +9,6 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
 LOG = ROOT / "agent.log"
-RUNS = 3
 
 PROMPT = (
     "program.md dosyasini oku ve talimatlarini harfiyen uygula. "
@@ -67,6 +66,8 @@ def run_claude(log):
             "-p",
             PROMPT,
             "--dangerously-skip-permissions",
+            "--model",
+            "default",
             "--verbose",
             "--output-format",
             "stream-json",
@@ -94,7 +95,7 @@ def run_claude(log):
 
 def main():
     with open(LOG, "a", encoding="utf-8") as log:
-        for _ in range(RUNS):
+        while True:
             header = f"=== {datetime.now():%Y-%m-%d %H:%M:%S} yeni oturum ===\n"  # noqa: DTZ005
             print(header, end="")
             log.write(header)
@@ -102,9 +103,9 @@ def main():
             if run_claude(log) == 0:
                 time.sleep(5)
             else:
-                print("claude hata ile cikti, 60 sn bekleniyor")
+                print("claude hata ile cikti, 5 dk bekleniyor")
                 log.write("claude hata ile cikti\n")
-                time.sleep(60)
+                time.sleep(300)
 
 
 if __name__ == "__main__":
