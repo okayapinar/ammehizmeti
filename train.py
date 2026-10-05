@@ -38,6 +38,7 @@ class Model:
         self.season_games = 0
         self.series = defaultdict(int)
         self.po_model = linear_model.LogisticRegression(optim.SGD(0.005))  # playoff-only total model
+        self.po_spread = linear_model.LogisticRegression(optim.SGD(0.005))
 
     @staticmethod
     def gain_fn(thr):
@@ -101,6 +102,9 @@ class Model:
             if target == "id_total" and pre["playoffs"]:
                 pp = self.po_model.predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
                 out[target] = 0.5 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
+            if target == "id_spread" and pre["playoffs"]:
+                pp = self.po_spread.predict_proba_one(xs).get(1, 0.5)
+                out[target] = 0.5 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
         return out
 
     def learn(self, pre, result):
@@ -118,6 +122,9 @@ class Model:
                     # label smoothing: learn y with weight 0.88 and the opposite label with weight 0.12
                     model.learn_one(xg, y, w=0.88)
                     model.learn_one(xg, 1 - y, w=0.12)
+                if target == "id_spread" and pre["playoffs"]:
+                    self.po_spread.learn_one(xs, y, w=0.88)
+                    self.po_spread.learn_one(xs, 1 - y, w=0.12)
                 if target == "id_total" and pre["playoffs"]:
                     xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
                     self.po_model.learn_one(xg, y, w=0.88)
