@@ -37,7 +37,7 @@ class Model:
         self.season = None
         self.season_games = 0
         self.series = defaultdict(int)
-        self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(0.005)) for t in TARGETS}  # learn playoff games only
+        self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(0.006)) for t in TARGETS}  # learn playoff games only
         self.late_models = {t: linear_model.LogisticRegression(optim.SGD(0.0055)) for t in TARGETS}  # learn late regular-season games only
 
 
