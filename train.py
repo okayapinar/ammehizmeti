@@ -229,7 +229,7 @@ class Model:
             self.playoff_sd = (y - self.playoff_reg.predict(self.playoff_scaler.transform(X))).std()
 
     def playoff_spread(self, pre, x, out):
-        # playoff spread: average with P(cover) = Phi(predicted margin residual / residual sd) of the playoff regression
+        # playoff spread: P(cover) = Phi(predicted margin residual / residual sd) of the playoff regression (replaces the model's)
         if self.playoff_reg_season != pre["season"]:
             self.playoff_reg_season = pre["season"]
             self.fit_playoff_reg(pre["season"])
@@ -237,7 +237,7 @@ class Model:
         self.playoff_pending[self.game_key(pre)] = f
         if self.playoff_reg is not None:
             mu = self.playoff_reg.predict(self.playoff_scaler.transform([f]))[0]
-            out["id_spread"] = 0.5 * out["id_spread"] + 0.5 * 0.5 * (1 + math.erf(mu / self.playoff_sd / math.sqrt(2)))
+            out["id_spread"] = 0.5 * (1 + math.erf(mu / self.playoff_sd / math.sqrt(2)))
 
     def route(self, pre, out):
         # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
