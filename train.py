@@ -9,7 +9,10 @@ autoresearch: AJANIN DEĞİŞTİRDİĞİ TEK DOSYA.
 import math
 from collections import defaultdict
 
+import numpy as np
 from river import linear_model, optim, preprocessing
+from sklearn.linear_model import Ridge
+from sklearn.preprocessing import StandardScaler
 
 from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
 
@@ -40,6 +43,7 @@ CONFERENCE = load_team_maps()[1]
 SEASON_LENGTH = {2012: 66, 2020: 72, 2021: 72}  # shortened seasons (lockout, pandemic); 82 games otherwise
 STAKES_FROM = 60  # team games played before the standings define a playoff-bubble team
 TEMPERATURE_LR, TEMPERATURE_MIN = 0.01, 0.05  # online calibration slope on the final logit
+PLAYOFF_RIDGE_ALPHA, PLAYOFF_RIDGE_MIN = 10.0, 200  # playoff line-error regression: ridge penalty, past playoff games needed
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
 ELO_FEATURES = ("elo_edge", "elo_edge_vs_line")  # zero during the Elo warm-up
@@ -76,6 +80,11 @@ class Model:
         self.season = None
         self.season_games = 0
         self.series = defaultdict(int)
+        self.series_last = {}  # playoff series -> its previous game's ({team: margin minus line-implied margin}, total residual)
+        self.playoff_opponents = defaultdict(set)  # this postseason's opponents per team (round number)
+        self.playoff_rows = []  # past playoff games: (season, context, favourite's margin residual vs the spread)
+        self.playoff_pending = {}
+        self.playoff_reg, self.playoff_reg_season = None, None
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
         self.routed = {}
@@ -194,8 +203,41 @@ class Model:
                 pe = expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
                 base_weight = PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5
                 out[target] = base_weight * out[target] + 0.5 * pe
+        if pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
+            self.playoff_spread(pre, x, out)
         self.route(pre, out)
         return self.calibrate(pre, out)
+
+    def playoff_context(self, pre, x):
+        # playoff spread context: line, venue, series game, round, rest, and the favourite's line error in the series' previous game
+        fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
+        played = self.playoff_opponents[pre["home"]]
+        rnd = min(len(played) + (pre["away"] not in played), 4)
+        rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
+        last = self.series_last.get(frozenset((fav, dog)))
+        return [x["fav_home"], x["spread"], x["total_centered"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
+                min(rest_fav, rest_dog), rest_fav - rest_dog, last[0][fav] if last else 0.0, last[1] if last else 0.0]
+
+    def fit_playoff_reg(self, season):
+        # once per postseason: ridge of the favourite's margin residual vs the spread on all previous postseasons
+        rows = [(f, y) for s, f, y in self.playoff_rows if s < season]
+        self.playoff_reg = None
+        if len(rows) >= PLAYOFF_RIDGE_MIN:
+            X, y = np.array([f for f, _ in rows]), np.array([y for _, y in rows])
+            self.playoff_scaler = StandardScaler().fit(X)
+            self.playoff_reg = Ridge(alpha=PLAYOFF_RIDGE_ALPHA).fit(self.playoff_scaler.transform(X), y)
+            self.playoff_sd = (y - self.playoff_reg.predict(self.playoff_scaler.transform(X))).std()
+
+    def playoff_spread(self, pre, x, out):
+        # playoff spread: average with P(cover) = Phi(predicted margin residual / residual sd) of the playoff regression
+        if self.playoff_reg_season != pre["season"]:
+            self.playoff_reg_season = pre["season"]
+            self.fit_playoff_reg(pre["season"])
+        f = self.playoff_context(pre, x)
+        self.playoff_pending[self.game_key(pre)] = f
+        if self.playoff_reg is not None:
+            mu = self.playoff_reg.predict(self.playoff_scaler.transform([f]))[0]
+            out["id_spread"] = 0.5 * out["id_spread"] + 0.5 * 0.5 * (1 + math.erf(mu / self.playoff_sd / math.sqrt(2)))
 
     def route(self, pre, out):
         # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
@@ -263,6 +305,10 @@ class Model:
                 expert = self.expert(pre, target, LATE_LEARN_FROM)
                 if expert is not None:
                     learn_smoothed(expert, self.expert_view(xs), y)
+        f = self.playoff_pending.pop(self.game_key(pre), None)
+        if f is not None:
+            margin = result["score_home"] - result["score_away"]
+            self.playoff_rows.append((pre["season"], f, (margin if pre["whos_favored"] == "home" else -margin) - pre["spread"]))
 
         self.update_state(pre, result)
 
@@ -271,12 +317,20 @@ class Model:
             self.season = pre["season"]
             self.season_games = 0
             self.series = defaultdict(int)
+            self.series_last = {}
+            self.playoff_opponents = defaultdict(set)
             self.record = defaultdict(lambda: [0, 0])
             for t in list(self.elo):
                 self.elo[t] = (1 - ELO_REGRESS) * self.elo[t] + ELO_REGRESS * ELO_START
         self.season_games += 1
         if pre["playoffs"]:
             self.series[frozenset((pre["home"], pre["away"]))] += 1
+            if pre["spread"] is not None and pre["total"] is not None:
+                home, away = pre["home"], pre["away"]
+                error = result["score_home"] - result["score_away"] - (pre["spread"] if pre["whos_favored"] == "home" else -pre["spread"])
+                self.series_last[frozenset((home, away))] = ({home: error, away: -error}, result["score_home"] + result["score_away"] - pre["total"])
+                self.playoff_opponents[home].add(away)
+                self.playoff_opponents[away].add(home)
         elif pre["regular"]:
             home_won = result["score_home"] > result["score_away"]
             self.record[pre["home"]][0 if home_won else 1] += 1
