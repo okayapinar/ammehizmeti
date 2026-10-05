@@ -36,9 +36,10 @@ SERIES_CAP = 4  # playoff series game number is capped (games 4+ look alike)
 PLAY_IN_SERIES = 0.7  # series_game code for play-in games
 VS_LINE_FLOOR = -3.0  # elo_edge_vs_line floor (the upper side never binds)
 
-TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge", "spread")
-SPREAD_DROP = ("total", "playoffs", "spread_raw", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday",
-               "series_game", "tc_b2b_away", "playoff_saturday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS))
+# features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
+SPREAD_FEATURES = ("fav_home", "spread", "elo_edge", "elo_edge_vs_line", "rest_edge")
+TOTAL_FEATURES = ("fav_home", "spread_raw", "total", "playoffs", "total_centered", "day_game", "wednesday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS),
+                  "series_game", "b2b_home", "b2b_away", "b2b_both", "tc_b2b_away", "playoff_saturday")
 
 
 def clip(p):
@@ -117,8 +118,8 @@ class Model:
         return x
 
     def view(self, x, target):
-        drop = TOTAL_DROP if target == "id_total" else SPREAD_DROP
-        return {k: v for k, v in x.items() if k not in drop}
+        keep = TOTAL_FEATURES if target == "id_total" else SPREAD_FEATURES
+        return {k: v for k, v in x.items() if k in keep}
 
     def expert(self, pre, target, start):
         # phase expert for this game: playoff-only model, late regular-season model, or none
