@@ -78,7 +78,7 @@ class Model:
         self.season_games = 0
         self.series = defaultdict(int)
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
-        self.bubble_rate = [1.0, 2.0]  # bubble-side covers, bubble games (running cover rate of the bubble team)
+        self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
         self.routed = {}
         self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["playoff"])) for t in TARGETS}  # learn playoff games only
         self.late_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["late"])) for t in TARGETS}  # learn late regular-season games only
@@ -121,6 +121,10 @@ class Model:
         mates = [(w, l) for t, (w, l) in self.record.items() if t != team and CONFERENCE.get(t) == CONFERENCE.get(team)]
         rank = 1 + sum(w - l > wins - losses for w, l in mates)
         return 7 <= rank <= (10 if self.season >= 2021 else 9)
+
+    def final_game(self, team):
+        # the team's last regular-season game
+        return sum(self.record[team]) == SEASON_LENGTH.get(self.season, 82) - 1
 
     def features(self, pre):
         home, away, date = pre["home"], pre["away"], pre["date"]
@@ -184,19 +188,24 @@ class Model:
                 pe = expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
                 base_weight = PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5
                 out[target] = base_weight * out[target] + 0.5 * pe
-        self.route_bubble(pre, out)
+        self.route(pre, out)
         return self.calibrate(pre, out)
 
-    def route_bubble(self, pre, out):
-        # spread: exactly one playoff-bubble team -> pick its side with the running bubble cover rate
-        side = 0
+    def route(self, pre, out):
+        # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
+        # spread - the lone playoff-bubble team covers; total - a team's last regular-season game goes over (rest, nothing to play for)
+        rules = {}
         if pre["regular"] and not pre["playoffs"]:
             fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
-            side = int(self.bubble(fav)) - int(self.bubble(dog))
-        self.routed[self.game_key(pre)] = side
-        if side:
-            rate = self.bubble_rate[0] / self.bubble_rate[1]
-            out["id_spread"] = rate if side > 0 else 1 - rate
+            bubble = int(self.bubble(fav)) - int(self.bubble(dog))
+            if bubble:
+                rules["id_spread"] = ("bubble", bubble)
+            if self.final_game(fav) or self.final_game(dog):
+                rules["id_total"] = ("final", 1)
+        for t, (rule, side) in rules.items():
+            self.routed[(self.game_key(pre), t)] = (rule, side)
+            hits, n = self.route_rate[rule]
+            out[t] = hits / n if side > 0 else 1 - hits / n
 
     @staticmethod
     def game_key(pre):
@@ -228,10 +237,11 @@ class Model:
     def learn(self, pre, result):
         x = self.features(pre)
         self.learn_temperature(pre, result)
-        side = self.routed.pop(self.game_key(pre), 0)
-        if side and result["id_spread"] in (0, 1):
-            self.bubble_rate[0] += float((result["id_spread"] == 1) == (side > 0))
-            self.bubble_rate[1] += 1
+        for t in TARGETS:
+            rule, side = self.routed.pop((self.game_key(pre), t), (None, 0))
+            if side and result[t] in (0, 1):
+                self.route_rate[rule][0] += float((result[t] == 1) == (side > 0))
+                self.route_rate[rule][1] += 1
         for target, models in self.models.items():
             y = result[target]
             if y is not None and y != PUSH:
