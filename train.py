@@ -65,7 +65,7 @@ class Model:
         member_thresholds = {"id_total": EARLY_THRESHOLDS, "id_spread": EARLY_THRESHOLDS[:1]}
         self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in member_thresholds[t]] for t in TARGETS}
         # temperature calibration of the final probability (a slope on its logit: never changes a pick)
-        self.temperature = {t: 1.0 for t in TARGETS}
+        self.temperature = defaultdict(lambda: 1.0)  # per (target, phase): the final probability is built differently in each phase
         self.pending = {}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_game = {}
@@ -128,6 +128,13 @@ class Model:
         keep = TOTAL_FEATURES if target == "id_total" else SPREAD_FEATURES
         return {k: v for k, v in x.items() if k in keep}
 
+    def phase(self, pre, target):
+        if pre["playoffs"]:
+            return "playoff"
+        if pre["regular"] and self.season_games > LATE_PREDICT_FROM[target]:
+            return "late"
+        return "early" if self.season_games < EARLY_THRESHOLDS[1] else "main"
+
     def expert(self, pre, target, start):
         # phase expert for this game: playoff-only model, late regular-season model, or none
         if pre["playoffs"]:
@@ -154,17 +161,19 @@ class Model:
         key = (pre["date"], pre["home"], pre["away"])
         for t in TARGETS:
             z = logit(out[t])
-            self.pending[(key, t)] = z
-            out[t] = 1 / (1 + math.exp(-self.temperature[t] * z))
+            tk = (t, self.phase(pre, t))
+            self.pending[(key, t)] = (z, tk)
+            out[t] = 1 / (1 + math.exp(-self.temperature[tk] * z))
         return out
 
     def learn_temperature(self, pre, result):
         key = (pre["date"], pre["home"], pre["away"])
         for t in TARGETS:
-            z = self.pending.pop((key, t), None)
-            if z is not None and result[t] in (0, 1):
-                p = 1 / (1 + math.exp(-self.temperature[t] * z))
-                self.temperature[t] = max(TEMPERATURE_MIN, self.temperature[t] + TEMPERATURE_LR * (result[t] - p) * z)
+            entry = self.pending.pop((key, t), None)
+            if entry is not None and result[t] in (0, 1):
+                z, tk = entry
+                p = 1 / (1 + math.exp(-self.temperature[tk] * z))
+                self.temperature[tk] = max(TEMPERATURE_MIN, self.temperature[tk] + TEMPERATURE_LR * (result[t] - p) * z)
 
     def learn(self, pre, result):
         x = self.features(pre)
