@@ -103,7 +103,7 @@ class Model:
             if pre["playoffs"]:  # playoff games: half from the playoff-only model
                 pp = self.playoff_models[target].predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
                 out[target] = 0.45 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
-            elif target == "id_total" and pre["regular"] and self.season_games > 1000:
+            elif pre["regular"] and self.season_games > (1000 if target == "id_total" else 1150):
                 pp = self.late_models[target].predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
                 out[target] = 0.5 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
 
@@ -128,7 +128,7 @@ class Model:
                     xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
                     self.playoff_models[target].learn_one(xg, y, w=0.88)
                     self.playoff_models[target].learn_one(xg, 1 - y, w=0.12)
-                elif target == "id_total" and pre["regular"] and self.season_games > 1000:
+                elif pre["regular"] and self.season_games > (1000 if target == "id_total" else 1150):
                     xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
                     self.late_models[target].learn_one(xg, y, w=0.88)
                     self.late_models[target].learn_one(xg, 1 - y, w=0.12)
