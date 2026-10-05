@@ -29,6 +29,12 @@ SMOOTH_WEIGHTS = (0.88, 0.12)  # label smoothing: weight of the observed label a
 # phase experts: league game after which the late-season expert votes / learns, per target
 LATE_PREDICT_FROM = {"id_total": 1000, "id_spread": 1150}
 LATE_LEARN_FROM = {"id_total": 950, "id_spread": 1150}
+EXPERT_LRS = {"playoff": 0.006, "late": 0.0065}
+PLAYOFF_BASE_WEIGHT = 0.45  # playoff games: 0.45 * ensemble + 0.5 * expert (weights sum to 0.95, a mild shrink toward 0)
+SPREAD_CAP, TOTAL_CAP = 19.0, 250.0  # line caps for the model features (spread_raw keeps the uncapped spread)
+SERIES_CAP = 4  # playoff series game number is capped (games 4+ look alike)
+PLAY_IN_SERIES = 0.7  # series_game code for play-in games
+VS_LINE_FLOOR = -3.0  # elo_edge_vs_line floor (the upper side never binds)
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge", "spread")
 SPREAD_DROP = ("total", "playoffs", "spread_raw", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday",
@@ -55,8 +61,8 @@ class Model:
         self.season = None
         self.season_games = 0
         self.series = defaultdict(int)
-        self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(0.006)) for t in TARGETS}  # learn playoff games only
-        self.late_models = {t: linear_model.LogisticRegression(optim.SGD(0.0065)) for t in TARGETS}  # learn late regular-season games only
+        self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["playoff"])) for t in TARGETS}  # learn playoff games only
+        self.late_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["late"])) for t in TARGETS}  # learn late regular-season games only
 
     @staticmethod
     def early_view(thr):
@@ -78,7 +84,7 @@ class Model:
         home, away, date = pre["home"], pre["away"], pre["date"]
         fav_home = pre["whos_favored"] == "home"
         sgn = 1 if fav_home else -1
-        spread = min(pre["spread"] or 0.0, 19.0)
+        spread = min(pre["spread"] or 0.0, SPREAD_CAP)
         elo_diff = self.elo[home] - self.elo[away]
         elo_on = float(self.season_games > ELO_WARMUP)  # Elo features are off while Elo is frozen
         rest_home, rest_away = self.rest_days(home, date), self.rest_days(away, date)
@@ -86,16 +92,16 @@ class Model:
             "fav_home": float(fav_home),
             "spread": spread,
             "spread_raw": pre["spread"] or 0.0,  # total model sees the uncapped line
-            "total": min(pre["total"] or 0.0, 250.0),
+            "total": min(pre["total"] or 0.0, TOTAL_CAP),
             "elo_edge": sgn * elo_diff / 100 * elo_on,
-            "elo_edge_vs_line": max(-3.0, sgn * elo_diff / 100 - spread / 3) * elo_on,  # residual vs the line, floored at -3 (the upper bound never binds)
+            "elo_edge_vs_line": max(VS_LINE_FLOOR, sgn * elo_diff / 100 - spread / 3) * elo_on,  # Elo edge minus the line (1 point ~ 33 Elo)
             "rest_edge": sgn * (rest_home - rest_away),
             "playoffs": float(pre["playoffs"]),
             "total_centered": 100 * ((pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0)) / (self.mean_total or pre["total"] or 1.0),
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
             "wednesday": float(date.weekday() == 2),
             **{f"early_{thr}": float(self.season_games < thr) for thr in EARLY_THRESHOLDS},
-            "series_game": float(min(self.series[frozenset((home, away))] + 1, 4)) if pre["playoffs"] else (0.7 if not pre["regular"] else 0.0),
+            "series_game": float(min(self.series[frozenset((home, away))] + 1, SERIES_CAP)) if pre["playoffs"] else (PLAY_IN_SERIES if not pre["regular"] else 0.0),
             "b2b_home": float(rest_home <= 1),
             "b2b_away": float(rest_away <= 1),
             "b2b_both": float(rest_home <= 1 and rest_away <= 1),
@@ -124,9 +130,9 @@ class Model:
             ps = [clip(model.predict_proba_one(self.early_view(g)(xs)).get(1, 0.5)) for g, model in models]
             out[target] = sum(ps) / len(ps)
             expert = self.expert(pre, target, LATE_PREDICT_FROM)
-            if expert is not None:  # half from the phase expert (the playoff blend keeps the base's 0.45 weight)
+            if expert is not None:  # half from the phase expert
                 pe = clip(expert.predict_proba_one(self.early_view(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5))
-                out[target] = (0.45 if pre["playoffs"] else 0.5) * out[target] + 0.5 * pe
+                out[target] = (PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5) * out[target] + 0.5 * pe
         return out
 
     def learn(self, pre, result):
