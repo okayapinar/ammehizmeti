@@ -79,23 +79,26 @@ class Model:
         fav_home = pre["whos_favored"] == "home"
         sgn = 1 if fav_home else -1
         spread = min(pre["spread"] or 0.0, 19.0)
+        elo_diff = self.elo[home] - self.elo[away]
+        elo_on = float(self.season_games > ELO_WARMUP)  # Elo features are off while Elo is frozen
+        rest_home, rest_away = self.rest_days(home, date), self.rest_days(away, date)
         x = {
             "fav_home": float(fav_home),
             "spread": spread,
             "spread_raw": pre["spread"] or 0.0,  # total model sees the uncapped line
             "total": min(pre["total"] or 0.0, 250.0),
-            "elo_edge": sgn * (self.elo[home] - self.elo[away]) / 100 * float(self.season_games > ELO_WARMUP),  # Elo features off while Elo is frozen
-            "elo_edge_vs_line": max(-3.0, sgn * (self.elo[home] - self.elo[away]) / 100 - spread / 3) * float(self.season_games > ELO_WARMUP),  # residual vs the line, floored at -3 (the upper bound never binds), off while Elo is frozen
-            "rest_edge": sgn * (self.rest_days(home, date) - self.rest_days(away, date)),
+            "elo_edge": sgn * elo_diff / 100 * elo_on,
+            "elo_edge_vs_line": max(-3.0, sgn * elo_diff / 100 - spread / 3) * elo_on,  # residual vs the line, floored at -3 (the upper bound never binds)
+            "rest_edge": sgn * (rest_home - rest_away),
             "playoffs": float(pre["playoffs"]),
             "total_centered": 100 * ((pre["total"] or 0.0) - (self.mean_total or pre["total"] or 0.0)) / (self.mean_total or pre["total"] or 1.0),
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
             "wednesday": float(date.weekday() == 2),
             **{f"early_{thr}": float(self.season_games < thr) for thr in EARLY_THRESHOLDS},
             "series_game": float(min(self.series[frozenset((home, away))] + 1, 4)) if pre["playoffs"] else (0.7 if not pre["regular"] else 0.0),
-            "b2b_home": float(self.rest_days(home, date) <= 1),
-            "b2b_away": float(self.rest_days(away, date) <= 1),
-            "b2b_both": float(self.rest_days(home, date) <= 1 and self.rest_days(away, date) <= 1),
+            "b2b_home": float(rest_home <= 1),
+            "b2b_away": float(rest_away <= 1),
+            "b2b_both": float(rest_home <= 1 and rest_away <= 1),
         }
         x["tc_b2b_away"] = x["total_centered"] * x["b2b_away"]
         x["playoff_saturday"] = float(pre["playoffs"] and date.weekday() == 5)
