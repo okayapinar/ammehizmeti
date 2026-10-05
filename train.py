@@ -134,7 +134,7 @@ class Model:
         k = 29.75 if self.season_games <= ELO_WARMUP + 150 else ELO_K  # faster re-learning right after the warm-up
         delta = k * (int(home_won) - expected_home)
         if self.season_games <= ELO_WARMUP + 275 and abs(self.elo[home] - self.elo[away]) < 50:
-            delta *= 1.15  # early toss-ups separate similar teams
+            delta *= 1.16  # early toss-ups separate similar teams
         if not pre["playoffs"] and self.season_games > ELO_WARMUP:  # skip the first ~5 games per team (rotation noise)
             self.elo[home] += delta
             self.elo[away] -= delta
