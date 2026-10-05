@@ -37,8 +37,7 @@ class Model:
         self.season = None
         self.season_games = 0
         self.series = defaultdict(int)
-        self.po_model = linear_model.LogisticRegression(optim.SGD(0.005))  # playoff-only total model
-        self.po_spread = linear_model.LogisticRegression(optim.SGD(0.005))
+        self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(0.005)) for t in TARGETS}  # learn playoff games only
 
     @staticmethod
     def gain_fn(thr):
@@ -99,11 +98,8 @@ class Model:
                 p0, p1 = proba.get(0, 0.0), proba.get(1, 0.0)
                 ps.append(min(max(p1 / (p0 + p1) if p0 + p1 > 0 else 0.5, 0.42), 0.58))  # member probabilities clipped
             out[target] = sum(ps) / len(ps)
-            if target == "id_total" and pre["playoffs"]:
-                pp = self.po_model.predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
-                out[target] = 0.5 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
-            if target == "id_spread" and pre["playoffs"]:
-                pp = self.po_spread.predict_proba_one(xs).get(1, 0.5)
+            if pre["playoffs"]:  # playoff games: half from the playoff-only model
+                pp = self.playoff_models[target].predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
                 out[target] = 0.5 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
         return out
 
@@ -122,13 +118,10 @@ class Model:
                     # label smoothing: learn y with weight 0.88 and the opposite label with weight 0.12
                     model.learn_one(xg, y, w=0.88)
                     model.learn_one(xg, 1 - y, w=0.12)
-                if target == "id_spread" and pre["playoffs"]:
-                    self.po_spread.learn_one(xs, y, w=0.88)
-                    self.po_spread.learn_one(xs, 1 - y, w=0.12)
-                if target == "id_total" and pre["playoffs"]:
+                if pre["playoffs"]:
                     xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
-                    self.po_model.learn_one(xg, y, w=0.88)
-                    self.po_model.learn_one(xg, 1 - y, w=0.12)
+                    self.playoff_models[target].learn_one(xg, y, w=0.88)
+                    self.playoff_models[target].learn_one(xg, 1 - y, w=0.12)
         self.update_state(pre, result)
 
     def update_state(self, pre, result):
