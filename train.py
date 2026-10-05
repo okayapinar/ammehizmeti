@@ -77,9 +77,9 @@ class Model:
         self.late_models = {t: linear_model.LogisticRegression(optim.SGD(EXPERT_LRS["late"])) for t in TARGETS}  # learn late regular-season games only
 
     @staticmethod
-    def early_view(thr):
+    def early_view(x, thr):
         # each member sees a single early-season indicator (its own threshold)
-        return lambda x: {("early_season" if k == f"early_{thr}" else k): v for k, v in x.items() if not (k.startswith("early_") and k != f"early_{thr}")}
+        return {("early_season" if k == f"early_{thr}" else k): v for k, v in x.items() if not (k.startswith("early_") and k != f"early_{thr}")}
 
     def rest_days(self, team, date):
         if team not in self.last_game:
@@ -148,11 +148,11 @@ class Model:
         out = {}
         for target, models in self.models.items():
             xs = self.scalers[target].transform_one(self.view(x, target))
-            ps = [model.predict_proba_one(self.early_view(g)(xs)).get(1, 0.5) for g, model in models]
+            ps = [model.predict_proba_one(self.early_view(xs, g)).get(1, 0.5) for g, model in models]
             out[target] = sum(ps) / len(ps)
             expert = self.expert(pre, target, LATE_PREDICT_FROM)
             if expert is not None:  # half from the phase expert
-                pe = expert.predict_proba_one(self.early_view(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
+                pe = expert.predict_proba_one(self.early_view(xs, EARLY_THRESHOLDS[1])).get(1, 0.5)
                 out[target] = (PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5) * out[target] + 0.5 * pe
         return self.calibrate(pre, out)
 
@@ -187,10 +187,10 @@ class Model:
                     xt = {k: v for k, v in xt.items() if k not in ("elo_edge", "elo_edge_vs_line")}  # zeroed Elo features do not shape the scaler
                 self.scalers[target].learn_one(xt)
                 for g, model in models:
-                    learn_smoothed(model, self.early_view(g)(xs), y)
+                    learn_smoothed(model, self.early_view(xs, g), y)
                 expert = self.expert(pre, target, LATE_LEARN_FROM)
                 if expert is not None:
-                    learn_smoothed(expert, self.early_view(EARLY_THRESHOLDS[1])(xs), y)
+                    learn_smoothed(expert, self.early_view(xs, EARLY_THRESHOLDS[1]), y)
 
         self.update_state(pre, result)
 
