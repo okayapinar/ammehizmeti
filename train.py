@@ -6,6 +6,7 @@ autoresearch: AJANIN DEĞİŞTİRDİĞİ TEK DOSYA.
   Model.learn(pre, result)  -> maç sonucu ile durumu/modeli güncelle
 Çalıştırma: python train.py
 """
+import math
 from collections import defaultdict
 
 from river import linear_model, optim, preprocessing
@@ -24,7 +25,6 @@ ELO_WINTER_HCA = -5  # home-edge change in January and February
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 EARLY_THRESHOLDS = (60, 120, 190)
-PROB_CLIP = (0.42, 0.58)  # member and expert probabilities are clipped to this range
 SMOOTH_WEIGHTS = (0.88, 0.12)  # label smoothing: weight of the observed label and of the opposite label
 # phase experts: league game after which the late-season expert votes / learns, per target
 LATE_PREDICT_FROM = {"id_total": 1000, "id_spread": 1150}
@@ -42,8 +42,9 @@ TOTAL_FEATURES = ("fav_home", "spread_raw", "total", "playoffs", "total_centered
                   "series_game", "b2b_home", "b2b_away", "b2b_both", "tc_b2b_away", "playoff_saturday")
 
 
-def clip(p):
-    return min(max(p, PROB_CLIP[0]), PROB_CLIP[1])
+def logit(p):
+    p = min(max(p, 1e-6), 1 - 1e-6)
+    return math.log(p / (1 - p))
 
 
 def learn_smoothed(model, x, y):
@@ -60,6 +61,9 @@ class Model:
         # so it needs only one threshold per lr (triplicates would be identical under a plain mean)
         member_thresholds = {"id_total": EARLY_THRESHOLDS, "id_spread": EARLY_THRESHOLDS[:1]}
         self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in member_thresholds[t]] for t in TARGETS}
+        # temperature calibration of the final probability (a slope on its logit: never changes a pick)
+        self.temperature = {t: 1.0 for t in TARGETS}
+        self.pending = {}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_game = {}
         self.mean_total = None
@@ -134,16 +138,27 @@ class Model:
         out = {}
         for target, models in self.models.items():
             xs = self.scalers[target].transform_one(self.view(x, target))
-            ps = [clip(model.predict_proba_one(self.early_view(g)(xs)).get(1, 0.5)) for g, model in models]
+            ps = [model.predict_proba_one(self.early_view(g)(xs)).get(1, 0.5) for g, model in models]
             out[target] = sum(ps) / len(ps)
             expert = self.expert(pre, target, LATE_PREDICT_FROM)
             if expert is not None:  # half from the phase expert
-                pe = clip(expert.predict_proba_one(self.early_view(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5))
+                pe = expert.predict_proba_one(self.early_view(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
                 out[target] = (PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5) * out[target] + 0.5 * pe
+        key = (pre["date"], pre["home"], pre["away"])
+        for t in TARGETS:
+            z = logit(out[t])
+            self.pending[(key, t)] = z
+            out[t] = 1 / (1 + math.exp(-self.temperature[t] * z))
         return out
 
     def learn(self, pre, result):
         x = self.features(pre)
+        key = (pre["date"], pre["home"], pre["away"])
+        for t in TARGETS:
+            z = self.pending.pop((key, t), None)
+            if z is not None and result[t] in (0, 1):
+                p = 1 / (1 + math.exp(-self.temperature[t] * z))
+                self.temperature[t] = max(0.05, self.temperature[t] + 0.01 * (result[t] - p) * z)
         for target, models in self.models.items():
             y = result[target]
             if y is not None and y != PUSH:
