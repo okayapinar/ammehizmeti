@@ -42,8 +42,8 @@ CONFERENCE = load_team_maps()[1]
 SEASON_LENGTH = {2012: 66, 2020: 72, 2021: 72}  # shortened seasons (lockout, pandemic); 82 games otherwise
 STAKES_FROM = 60  # team games played before the standings define a playoff-bubble team
 TEMPERATURE_LR, TEMPERATURE_MIN = 0.01, 0.05  # online calibration slope on the final logit
-PLAYOFF_RIDGE_ALPHA, PLAYOFF_RIDGE_MIN = 10.0, 200  # playoff line-error regression: ridge penalty, past playoff games needed
-SEGMENT_RIDGE_ALPHA, SEGMENT_RIDGE_MIN = 10.0, 60  # regular-season segment line-error regressions: ridge penalty, past segment games needed
+RIDGE_ALPHA = 10.0  # penalty of the line-error ridges (playoffs, regular-season segments)
+PLAYOFF_RIDGE_MIN, SEGMENT_RIDGE_MIN = 200, 60  # past games a playoff / segment ridge needs
 ALTITUDE = ("den", "utah")  # high-altitude home courts
 # regular-season segments with their own line-error ridge: name -> (target, weight of the ridge probability)
 SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5)}
@@ -58,6 +58,22 @@ TOTAL_FEATURES = ("fav_home", "spread_raw", "total", "playoffs", "total_centered
 def logit(p):
     p = min(max(p, 1e-6), 1 - 1e-6)
     return math.log(p / (1 - p))
+
+
+def fit_line_ridge(rows, min_rows):
+    # ridge of the line error on (context, error) rows: (scaler, ridge, residual sd), or None with too few rows
+    if len(rows) < min_rows:
+        return None
+    X, y = np.array([f for f, _ in rows]), np.array([y for _, y in rows])
+    scaler = StandardScaler().fit(X)
+    reg = Ridge(alpha=RIDGE_ALPHA).fit(scaler.transform(X), y)
+    return scaler, reg, (y - reg.predict(scaler.transform(X))).std()
+
+
+def line_ridge_prob(fit, f):
+    # P(line error > 0) = Phi(predicted error / residual sd)
+    scaler, reg, sd = fit
+    return 0.5 * (1 + math.erf(reg.predict(scaler.transform([f]))[0] / sd / math.sqrt(2)))
 
 
 def learn_smoothed(model, x, y):
@@ -231,13 +247,7 @@ class Model:
     def fit_playoff_reg(self, season):
         # once per postseason, per target: ridge of the line error on all previous postseasons
         for t in TARGETS:
-            rows = [(f, y) for s, f, y in self.playoff_rows[t] if s < season]
-            self.playoff_reg[t] = None
-            if len(rows) >= PLAYOFF_RIDGE_MIN:
-                X, y = np.array([f for f, _ in rows]), np.array([y for _, y in rows])
-                scaler = StandardScaler().fit(X)
-                reg = Ridge(alpha=PLAYOFF_RIDGE_ALPHA).fit(scaler.transform(X), y)
-                self.playoff_reg[t] = (scaler, reg, (y - reg.predict(scaler.transform(X))).std())
+            self.playoff_reg[t] = fit_line_ridge([(f, y) for s, f, y in self.playoff_rows[t] if s < season], PLAYOFF_RIDGE_MIN)
 
     def playoff_lines(self, pre, x, out):
         # playoff games: P(1) = Phi(predicted line error / residual sd) of the playoff regressions (spread: replaces the model; total: 50/50)
@@ -248,9 +258,7 @@ class Model:
             f = self.playoff_context(pre, x, t)
             self.playoff_pending[(self.game_key(pre), t)] = f
             if self.playoff_reg[t] is not None:
-                scaler, reg, sd = self.playoff_reg[t]
-                mu = reg.predict(scaler.transform([f]))[0]
-                p = 0.5 * (1 + math.erf(mu / sd / math.sqrt(2)))
+                p = line_ridge_prob(self.playoff_reg[t], f)
                 out[t] = p if t == "id_spread" else 0.5 * out[t] + 0.5 * p
 
     def segments(self, pre):
@@ -279,21 +287,13 @@ class Model:
         if self.segment_reg_season != pre["season"]:
             self.segment_reg_season = pre["season"]
             for seg in SEGMENTS:
-                rows = [(f, y) for s, f, y in self.segment_rows[seg] if s < pre["season"]]
-                self.segment_reg[seg] = None
-                if len(rows) >= SEGMENT_RIDGE_MIN:
-                    X, y = np.array([f for f, _ in rows]), np.array([y for _, y in rows])
-                    scaler = StandardScaler().fit(X)
-                    reg = Ridge(alpha=SEGMENT_RIDGE_ALPHA).fit(scaler.transform(X), y)
-                    self.segment_reg[seg] = (scaler, reg, (y - reg.predict(scaler.transform(X))).std())
+                self.segment_reg[seg] = fit_line_ridge([(f, y) for s, f, y in self.segment_rows[seg] if s < pre["season"]], SEGMENT_RIDGE_MIN)
         for seg in self.segments(pre):
             t, weight = SEGMENTS[seg]
             f = self.segment_context(pre, x, seg)
             self.segment_pending[(self.game_key(pre), seg)] = f
             if self.segment_reg[seg] is not None:
-                scaler, reg, sd = self.segment_reg[seg]
-                p = 0.5 * (1 + math.erf(reg.predict(scaler.transform([f]))[0] / sd / math.sqrt(2)))
-                out[t] = (1 - weight) * out[t] + weight * p
+                out[t] = (1 - weight) * out[t] + weight * line_ridge_prob(self.segment_reg[seg], f)
 
     def route(self, pre, out):
         # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
