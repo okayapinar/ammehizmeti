@@ -35,6 +35,7 @@ SPREAD_CAP, TOTAL_CAP = 19.0, 250.0  # line caps for the model features (spread_
 SERIES_CAP = 4  # playoff series game number is capped (games 4+ look alike)
 PLAY_IN_SERIES = 0.7  # series_game code for play-in games
 VS_LINE_FLOOR = -3.0  # elo_edge_vs_line floor (the upper side never binds)
+TEMPERATURE_LR, TEMPERATURE_MIN = 0.01, 0.05  # online calibration slope on the final logit
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
 SPREAD_FEATURES = ("fav_home", "spread", "elo_edge", "elo_edge_vs_line", "rest_edge")
@@ -144,6 +145,10 @@ class Model:
             if expert is not None:  # half from the phase expert
                 pe = expert.predict_proba_one(self.early_view(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
                 out[target] = (PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5) * out[target] + 0.5 * pe
+        return self.calibrate(pre, out)
+
+    def calibrate(self, pre, out):
+        # temperature scaling: remember each logit until the result arrives
         key = (pre["date"], pre["home"], pre["away"])
         for t in TARGETS:
             z = logit(out[t])
@@ -151,14 +156,17 @@ class Model:
             out[t] = 1 / (1 + math.exp(-self.temperature[t] * z))
         return out
 
-    def learn(self, pre, result):
-        x = self.features(pre)
+    def learn_temperature(self, pre, result):
         key = (pre["date"], pre["home"], pre["away"])
         for t in TARGETS:
             z = self.pending.pop((key, t), None)
             if z is not None and result[t] in (0, 1):
                 p = 1 / (1 + math.exp(-self.temperature[t] * z))
-                self.temperature[t] = max(0.05, self.temperature[t] + 0.01 * (result[t] - p) * z)
+                self.temperature[t] = max(TEMPERATURE_MIN, self.temperature[t] + TEMPERATURE_LR * (result[t] - p) * z)
+
+    def learn(self, pre, result):
+        x = self.features(pre)
+        self.learn_temperature(pre, result)
         for target, models in self.models.items():
             y = result[target]
             if y is not None and y != PUSH:
