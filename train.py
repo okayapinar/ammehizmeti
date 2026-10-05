@@ -320,16 +320,16 @@ class Model:
 
     def route(self, pre, out, spread_logit):
         # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
-        # spread - the lone playoff-bubble team covers, else the underdog when the model leans to a favourite in no worse ATS form;
+        # spread - the underdog when the model leans to a favourite whose ATS form is not far below the underdog's, else the lone
+        # playoff-bubble team covers;
         # total - a team's last regular-season game or two lottery teams go over
         rules = {}
         if pre["regular"] and not pre["playoffs"] and pre["season"] == self.season:  # standings are last season's until the first result
             fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
-            bubble = int(self.bubble(fav)) - int(self.bubble(dog))
-            if bubble:
-                rules["id_spread"] = ("bubble", bubble)
-            elif spread_logit > FAV_LEAN and self.ats_form(pre, fav) - self.ats_form(pre, dog) > FAV_LEAN_ATS_GAP:
+            if spread_logit > FAV_LEAN and self.ats_form(pre, fav) - self.ats_form(pre, dog) > FAV_LEAN_ATS_GAP:
                 rules["id_spread"] = ("fav_lean", -1)  # the model's favourite leans over-trust the favourite
+            elif self.bubble(fav) != self.bubble(dog):
+                rules["id_spread"] = ("bubble", 1 if self.bubble(fav) else -1)
             if self.final_game(fav) or self.final_game(dog):
                 rules["id_total"] = ("final", 1)
             elif self.lottery(fav) and self.lottery(dog):
