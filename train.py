@@ -30,9 +30,9 @@ LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 EARLY_THRESHOLDS = (60, 120, 190)
 SMOOTH_LABEL_W, SMOOTH_FLIP_W = 0.88, 0.12  # label smoothing: weight of the observed label and of the opposite label
-# late-season expert: league game after which the late-season expert votes / learns, per target
-LATE_PREDICT_FROM = {"id_total": 1000, "id_spread": 1150}
-LATE_LEARN_FROM = {"id_total": 950, "id_spread": 1150}
+# late-season expert (total only): league game after which the late-season expert votes / learns
+LATE_PREDICT_FROM = {"id_total": 1000}
+LATE_LEARN_FROM = {"id_total": 950}
 LATE_EXPERT_LR = 0.0065
 SPREAD_CAP, TOTAL_CAP = 19.0, 250.0  # line caps for the model features (spread_raw keeps the uncapped spread)
 SERIES_CAP = 4  # playoff series game number is capped (games 4+ look alike)
@@ -117,7 +117,7 @@ class Model:
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
         self.routed = {}
-        self.late_models = {t: linear_model.LogisticRegression(optim.SGD(LATE_EXPERT_LR)) for t in TARGETS}  # learn late regular-season games only
+        self.late_models = {t: linear_model.LogisticRegression(optim.SGD(LATE_EXPERT_LR)) for t in LATE_PREDICT_FROM}  # learn late regular-season games only
 
     @staticmethod
     def early_view(x, thr):
@@ -210,7 +210,7 @@ class Model:
     def phase(self, pre, target, late_from=LATE_PREDICT_FROM):
         if pre["playoffs"]:
             return "playoff"
-        if pre["regular"] and self.season_games > late_from[target]:
+        if pre["regular"] and target in late_from and self.season_games > late_from[target]:
             return "late"
         return "early" if self.season_games < EARLY_THRESHOLDS[1] else "main"
 
