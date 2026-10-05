@@ -100,7 +100,7 @@ class Model:
             out[target] = sum(ps) / len(ps)
             if pre["playoffs"]:  # playoff games: half from the playoff-only model
                 pp = self.playoff_models[target].predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
-                out[target] = 0.5 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
+                out[target] = 0.45 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
         return out
 
     def learn(self, pre, result):
