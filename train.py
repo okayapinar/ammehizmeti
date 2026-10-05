@@ -50,6 +50,7 @@ LINE_CHASE_MOVE, LINE_CHASE_HCA = 12.0, 2.5  # venue-adjusted line move (points)
 ATS_STREAK_GAMES, ATS_STREAK_MEAN = 3, 14.0  # a team's last 3 line errors share a sign with mean |error| >= 14 points
 # backdoor: a favourite of 8+ whose mean Q4 margin with a 15+ lead after three quarters (5+ such games) is 2+ points off the league's
 BACKDOOR_SPREAD, BACKDOOR_LEAD, BACKDOOR_GAMES, BACKDOOR_GAP = 8.0, 15, 5, 2.0
+FAV_LEAN, FAV_LEAN_ATS_GAP = 0.06051, -2.75  # fav_lean router: model spread logit above this, favourite's last-5 ATS form minus the underdog's above this
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
 ELO_FEATURES = ("elo_edge", "elo_edge_vs_line")  # zero during the Elo warm-up
@@ -230,11 +231,12 @@ class Model:
             expert = self.expert(pre, target, LATE_PREDICT_FROM)
             if expert is not None:  # 50/50 blend with the late expert
                 out[target] = 0.5 * out[target] + 0.5 * expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
+        spread_logit = logit(out["id_spread"])  # the model's own spread lean (regular season: before segments and routers)
         if pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
             self.playoff_lines(pre, x, out)
         if pre["regular"] and not pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
             self.segment_lines(pre, x, out)
-        self.route(pre, out)
+        self.route(pre, out, spread_logit)
         return self.calibrate(pre, out)
 
     def playoff_context(self, pre, x, target):
@@ -343,15 +345,23 @@ class Model:
             if self.segment_reg[seg] is not None:
                 out[t] = (1 - weight) * out[t] + weight * line_ridge_prob(self.segment_reg[seg], f)
 
-    def route(self, pre, out):
+    def ats_form(self, pre, team):
+        # the team's mean line error over its last 5 regular-season games (0 before its first)
+        errors = self.line_errors[(pre["season"], team)][-5:]
+        return sum(errors) / len(errors) if errors else 0.0
+
+    def route(self, pre, out, spread_logit):
         # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
-        # spread - the lone playoff-bubble team covers; total - a team's last regular-season game or two lottery teams go over
+        # spread - the lone playoff-bubble team covers, else the underdog when the model leans to a favourite in no worse ATS form;
+        # total - a team's last regular-season game or two lottery teams go over
         rules = {}
         if pre["regular"] and not pre["playoffs"] and pre["season"] == self.season:  # standings are last season's until the first result
             fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
             bubble = int(self.bubble(fav)) - int(self.bubble(dog))
             if bubble:
                 rules["id_spread"] = ("bubble", bubble)
+            elif spread_logit > FAV_LEAN and self.ats_form(pre, fav) - self.ats_form(pre, dog) > FAV_LEAN_ATS_GAP:
+                rules["id_spread"] = ("fav_lean", -1)  # the model's favourite leans over-trust the favourite
             if self.final_game(fav) or self.final_game(dog):
                 rules["id_total"] = ("final", 1)
             elif self.lottery(fav) and self.lottery(dog):
