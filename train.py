@@ -131,7 +131,7 @@ class Model:
 
         hca = ELO_HOME_ADV + 25 if self.season_games <= ELO_WARMUP + 275 else (ELO_HOME_ADV - 5 if pre["date"].month in (1, 2) else ELO_HOME_ADV)  # early-season home edge is larger
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - hca) / 400))
-        k = 30 if self.season_games <= ELO_WARMUP + 150 else ELO_K  # faster re-learning right after the warm-up
+        k = 29.75 if self.season_games <= ELO_WARMUP + 150 else ELO_K  # faster re-learning right after the warm-up
         delta = k * (int(home_won) - expected_home)
         if self.season_games <= ELO_WARMUP + 275 and abs(self.elo[home] - self.elo[away]) < 50:
             delta *= 1.15  # early toss-ups separate similar teams
