@@ -51,6 +51,8 @@ def learn_smoothed(model, x, y):
 
 
 class Model:
+    """Online logistic ensembles per target (spread: Elo vs the line; total: schedule context vs the line) plus playoff / late-season experts."""
+
     def __init__(self):
         self.scalers = {t: preprocessing.StandardScaler() for t in TARGETS}
         # the spread view has no early-season indicator, so one member per lr suffices there (identical to triplicates under a plain mean)
@@ -163,9 +165,15 @@ class Model:
         self.season_games += 1
         if pre["playoffs"]:
             self.series[frozenset((pre["home"], pre["away"]))] += 1
+        self.update_elo(pre, result)
+        if pre["total"]:
+            self.mean_total = pre["total"] if self.mean_total is None else self.mean_total + LINE_ALPHA * (pre["total"] - self.mean_total)
+        self.last_game[pre["home"]] = pre["date"]
+        self.last_game[pre["away"]] = pre["date"]
+
+    def update_elo(self, pre, result):
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
-
         early = self.season_games <= ELO_WARMUP + ELO_EARLY
         hca = ELO_HOME_ADV + (25 if early else (ELO_WINTER_HCA if pre["date"].month in (1, 2) else 0))
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - hca) / 400))
@@ -176,12 +184,6 @@ class Model:
         if not pre["playoffs"] and self.season_games > ELO_WARMUP:  # skip the first ~5 games per team (rotation noise)
             self.elo[home] += delta
             self.elo[away] -= delta
-
-        if pre["total"]:
-            self.mean_total = pre["total"] if self.mean_total is None else self.mean_total + LINE_ALPHA * (pre["total"] - self.mean_total)
-
-        self.last_game[home] = pre["date"]
-        self.last_game[away] = pre["date"]
 
 
 if __name__ == "__main__":
