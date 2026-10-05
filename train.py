@@ -269,7 +269,8 @@ class Model:
 
     def segments(self, pre):
         # the game's regular-season segments: the visitor on a back-to-back at altitude; a rest mismatch (one team on a
-        # back-to-back, the other with 2+ more days of rest)
+        # back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a line that chased a team's last
+        # result; a team whose previous game went to overtime
         fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
         rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
         segs = []
@@ -279,10 +280,10 @@ class Model:
             segs.append("rest_mismatch")
         if self.ats_streak(pre, fav) or self.ats_streak(pre, dog):
             segs.append("ats_streak")
-        if any(abs(move) >= LINE_CHASE_MOVE and move * err > 0 for move, err in (self.line_chase(pre, fav), self.line_chase(pre, dog))):
-            segs.append("line_chase")  # a line that chased a team's last result by 12+ points
+        if self.line_chase(pre, fav) or self.line_chase(pre, dog):
+            segs.append("line_chase")
         if self.last_ot.get((pre["season"], fav)) or self.last_ot.get((pre["season"], dog)):
-            segs.append("prev_ot")  # a team's previous game went to overtime
+            segs.append("prev_ot")
         return segs
 
     @staticmethod
@@ -292,9 +293,12 @@ class Model:
         return home_margin - LINE_CHASE_HCA if team == pre["home"] else -home_margin + LINE_CHASE_HCA
 
     def line_chase(self, pre, team):
-        # the team's venue-adjusted line move since its previous regular-season game this season, and that game's line error
+        # the team's venue-adjusted line moved 12+ points since its previous regular-season game, toward that game's line error
         key = (pre["season"], team)
-        return (self.venue_line(pre, team) - self.venue_lines[key], self.line_errors[key][-1]) if key in self.venue_lines else (0.0, 0.0)
+        if key not in self.venue_lines:
+            return False
+        move = self.venue_line(pre, team) - self.venue_lines[key]
+        return abs(move) >= LINE_CHASE_MOVE and move * self.line_errors[key][-1] > 0
 
     def ats_streak(self, pre, team):
         # the sum of the team's last line errors this season when they share a sign and are big (an ATS run the market may overprice), else 0
@@ -308,7 +312,7 @@ class Model:
         fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
         rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
         if SEGMENTS[seg][0] == "id_spread":
-            extra = {"ats_streak": [self.ats_streak(pre, fav), self.ats_streak(pre, dog)]}.get(seg, [])
+            extra = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)] if seg == "ats_streak" else []
             return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
         return [x["fav_home"], x["spread"], x["total_centered"], x["total"], min(rest_fav, rest_dog), rest_fav - rest_dog]
 
