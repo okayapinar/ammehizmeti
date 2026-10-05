@@ -23,7 +23,6 @@ ELO_CATCHUP_GAMES, ELO_CATCHUP_K = 150, 29.75  # faster re-learning (higher K) f
 ELO_EARLY = 275  # league games after the warm-up with a larger home edge and boosted toss-up updates
 ELO_EARLY_HCA = 25  # extra home edge in that early window
 ELO_TOSSUP_GAP, ELO_TOSSUP_BOOST = 50, 1.16  # early window: games between teams within 50 Elo update 1.16x (separates similar teams)
-ELO_WINTER_HCA = -5  # home-edge change in January and February
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 EARLY_THRESHOLDS = (60, 120, 190)
@@ -296,8 +295,6 @@ class Model:
         early = self.season_games <= ELO_WARMUP + ELO_EARLY
         if early:
             hca = ELO_HOME_ADV + ELO_EARLY_HCA
-        elif pre["date"].month in (1, 2):
-            hca = ELO_HOME_ADV + ELO_WINTER_HCA
         else:
             hca = ELO_HOME_ADV
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - hca) / 400))
