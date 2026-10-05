@@ -46,7 +46,9 @@ RIDGE_ALPHA = 10.0  # penalty of the line-error ridges (playoffs, regular-season
 PLAYOFF_RIDGE_MIN, SEGMENT_RIDGE_MIN = 200, 60  # past games a playoff / segment ridge needs
 ALTITUDE = ("den", "utah")  # high-altitude home courts
 # regular-season segments with their own line-error ridge: name -> (target, weight of the ridge probability)
-SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5), "ats_streak": ("id_spread", 0.5)}
+SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5), "ats_streak": ("id_spread", 0.5),
+            "line_chase": ("id_spread", 0.5)}
+LINE_CHASE_MOVE, LINE_CHASE_HCA = 12.0, 2.5  # venue-adjusted line move (points) since the team's previous game; home edge removed from lines
 ATS_STREAK_GAMES, ATS_STREAK_MEAN = 3, 14.0  # a team's last 3 line errors share a sign with mean |error| >= 14 points
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
@@ -109,6 +111,7 @@ class Model:
         self.segment_rows = {seg: [] for seg in SEGMENTS}  # past segment games: (season, context, line error)
         self.segment_pending = {}
         self.segment_reg, self.segment_reg_season = {}, None
+        self.venue_lines = {}  # (season, team) -> its last regular-season game's venue-adjusted line
         self.line_errors = defaultdict(list)  # (season, team) -> its regular-season line errors (margin minus line-implied margin)
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
@@ -275,7 +278,20 @@ class Model:
             segs.append("rest_mismatch")
         if self.ats_streak(pre, fav) or self.ats_streak(pre, dog):
             segs.append("ats_streak")
+        if any(abs(move) >= LINE_CHASE_MOVE and move * err > 0 for move, err in (self.line_chase(pre, fav), self.line_chase(pre, dog))):
+            segs.append("line_chase")  # a line that chased a team's last result by 12+ points
         return segs
+
+    @staticmethod
+    def venue_line(pre, team):
+        # the team's line-implied margin without the home edge
+        home_margin = pre["spread"] if pre["whos_favored"] == "home" else -pre["spread"]
+        return home_margin - LINE_CHASE_HCA if team == pre["home"] else -home_margin + LINE_CHASE_HCA
+
+    def line_chase(self, pre, team):
+        # the team's venue-adjusted line move since its previous regular-season game this season, and that game's line error
+        key = (pre["season"], team)
+        return (self.venue_line(pre, team) - self.venue_lines[key], self.line_errors[key][-1]) if key in self.venue_lines else (0.0, 0.0)
 
     def ats_streak(self, pre, team):
         # the sum of the team's last line errors this season when they share a sign and are big (an ATS run the market may overprice), else 0
@@ -289,7 +305,8 @@ class Model:
         fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
         rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
         if SEGMENTS[seg][0] == "id_spread":
-            extra = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)] if seg == "ats_streak" else []
+            extra = {"ats_streak": [self.ats_streak(pre, fav), self.ats_streak(pre, dog)],
+                     "line_chase": [*self.line_chase(pre, fav), *self.line_chase(pre, dog)]}.get(seg, [])
             return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
         return [x["fav_home"], x["spread"], x["total_centered"], x["total"], min(rest_fav, rest_dog), rest_fav - rest_dog]
 
@@ -387,6 +404,8 @@ class Model:
         if pre["regular"] and not pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
             self.line_errors[(pre["season"], pre["home"])].append(errors["id_spread"] if pre["whos_favored"] == "home" else -errors["id_spread"])
             self.line_errors[(pre["season"], pre["away"])].append(-errors["id_spread"] if pre["whos_favored"] == "home" else errors["id_spread"])
+            for team in (pre["home"], pre["away"]):
+                self.venue_lines[(pre["season"], team)] = self.venue_line(pre, team)
 
         self.update_state(pre, result)
 
