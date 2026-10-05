@@ -55,8 +55,10 @@ class Model:
 
     def __init__(self):
         self.scalers = {t: preprocessing.StandardScaler() for t in TARGETS}
-        # the spread view has no early-season indicator, so one member per lr suffices there (identical to triplicates under a plain mean)
-        self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in (EARLY_THRESHOLDS if t == "id_total" else EARLY_THRESHOLDS[:1])] for t in TARGETS}
+        # ensemble members: (early-season threshold, model) for every lr; the spread view has no early-season indicator,
+        # so it needs only one threshold per lr (triplicates would be identical under a plain mean)
+        member_thresholds = {"id_total": EARLY_THRESHOLDS, "id_spread": EARLY_THRESHOLDS[:1]}
+        self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in member_thresholds[t]] for t in TARGETS}
         self.elo = defaultdict(lambda: ELO_START)
         self.last_game = {}
         self.mean_total = None
