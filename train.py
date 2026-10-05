@@ -19,15 +19,15 @@ ELO_START = 1500
 ELO_HOME_ADV = 55
 ELO_WARMUP = 75  # league games per season before Elo is updated or used (~5 games per team)
 ELO_REGRESS = 0.40  # share of each rating pulled back to ELO_START at a new season
-ELO_CATCHUP = (150, 29.75)  # (league games after the warm-up, K) - faster re-learning right after the warm-up
+ELO_CATCHUP_GAMES, ELO_CATCHUP_K = 150, 29.75  # faster re-learning (higher K) for this many league games after the warm-up
 ELO_EARLY = 275  # league games after the warm-up with a larger home edge and boosted toss-up updates
 ELO_EARLY_HCA = 25  # extra home edge in that early window
-ELO_TOSSUP = (50, 1.16)  # early window: games between teams within 50 Elo update 1.16x (separates similar teams)
+ELO_TOSSUP_GAP, ELO_TOSSUP_BOOST = 50, 1.16  # early window: games between teams within 50 Elo update 1.16x (separates similar teams)
 ELO_WINTER_HCA = -5  # home-edge change in January and February
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 EARLY_THRESHOLDS = (60, 120, 190)
-SMOOTH_WEIGHTS = (0.88, 0.12)  # label smoothing: weight of the observed label and of the opposite label
+SMOOTH_LABEL_W, SMOOTH_FLIP_W = 0.88, 0.12  # label smoothing: weight of the observed label and of the opposite label
 # phase experts: league game after which the late-season expert votes / learns, per target
 LATE_PREDICT_FROM = {"id_total": 1000, "id_spread": 1150}
 LATE_LEARN_FROM = {"id_total": 950, "id_spread": 1150}
@@ -51,8 +51,8 @@ def logit(p):
 
 
 def learn_smoothed(model, x, y):
-    model.learn_one(x, y, w=SMOOTH_WEIGHTS[0])
-    model.learn_one(x, 1 - y, w=SMOOTH_WEIGHTS[1])
+    model.learn_one(x, y, w=SMOOTH_LABEL_W)
+    model.learn_one(x, 1 - y, w=SMOOTH_FLIP_W)
 
 
 class Model:
@@ -79,7 +79,12 @@ class Model:
     @staticmethod
     def early_view(x, thr):
         # each member sees a single early-season indicator (its own threshold)
-        return {("early_season" if k == f"early_{thr}" else k): v for k, v in x.items() if not (k.startswith("early_") and k != f"early_{thr}")}
+        own = f"early_{thr}"
+        return {("early_season" if k == own else k): v for k, v in x.items() if k == own or not k.startswith("early_")}
+
+    def expert_view(self, xs):
+        # phase experts see the middle early-season indicator
+        return self.early_view(xs, EARLY_THRESHOLDS[1])
 
     def rest_days(self, team, date):
         if team not in self.last_game:
@@ -102,33 +107,35 @@ class Model:
         home, away, date = pre["home"], pre["away"], pre["date"]
         fav_home = pre["whos_favored"] == "home"
         sgn = 1 if fav_home else -1
-        spread = min(pre["spread"] or 0.0, SPREAD_CAP)
-        elo_diff = self.elo[home] - self.elo[away]
+        spread_raw = pre["spread"] or 0.0  # total model sees the uncapped line
+        spread = min(spread_raw, SPREAD_CAP)
         elo_on = float(self.season_games > ELO_WARMUP)  # Elo features are off while Elo is frozen
+        elo_edge = sgn * (self.elo[home] - self.elo[away]) / 100  # favorite's Elo edge, in units of 100 Elo
         rest_home, rest_away = self.rest_days(home, date), self.rest_days(away, date)
+        b2b_home, b2b_away = float(rest_home <= 1), float(rest_away <= 1)
         total = pre["total"] or 0.0
         line_level = self.mean_total or total  # league line level (the first game is its own level)
-        x = {
+        total_centered = 100 * (total - line_level) / (line_level or 1.0)  # percent deviation from the league line level
+        return {
             "fav_home": float(fav_home),
             "spread": spread,
-            "spread_raw": pre["spread"] or 0.0,  # total model sees the uncapped line
+            "spread_raw": spread_raw,
             "total": min(total, TOTAL_CAP),
-            "elo_edge": sgn * elo_diff / 100 * elo_on,
-            "elo_edge_vs_line": max(VS_LINE_FLOOR, sgn * elo_diff / 100 - spread / 3) * elo_on,  # Elo edge minus the line (1 point ~ 33 Elo)
+            "elo_edge": elo_edge * elo_on,
+            "elo_edge_vs_line": max(VS_LINE_FLOOR, elo_edge - spread / 3) * elo_on,  # Elo edge minus the line (1 point ~ 33 Elo)
             "rest_edge": sgn * (rest_home - rest_away),
             "playoffs": float(pre["playoffs"]),
-            "total_centered": 100 * (total - line_level) / (line_level or 1.0),  # percent deviation from the league line level
+            "total_centered": total_centered,
             "day_game": float(date.weekday() == 6 or self.holiday(date)),
             "wednesday": float(date.weekday() == 2),
             **{f"early_{thr}": float(self.season_games < thr) for thr in EARLY_THRESHOLDS},
             "series_game": self.series_game(pre),
-            "b2b_home": float(rest_home <= 1),
-            "b2b_away": float(rest_away <= 1),
+            "b2b_home": b2b_home,
+            "b2b_away": b2b_away,
             "b2b_both": float(rest_home <= 1 and rest_away <= 1),
+            "tc_b2b_away": total_centered * b2b_away,
+            "playoff_saturday": float(pre["playoffs"] and date.weekday() == 5),
         }
-        x["tc_b2b_away"] = x["total_centered"] * x["b2b_away"]
-        x["playoff_saturday"] = float(pre["playoffs"] and date.weekday() == 5)
-        return x
 
     def view(self, x, target):
         keep = TOTAL_FEATURES if target == "id_total" else SPREAD_FEATURES
@@ -154,28 +161,37 @@ class Model:
             ps = [model.predict_proba_one(self.early_view(xs, g)).get(1, 0.5) for g, model in models]
             out[target] = sum(ps) / len(ps)
             expert = self.expert(pre, target, LATE_PREDICT_FROM)
-            if expert is not None:  # half from the phase expert
-                pe = expert.predict_proba_one(self.early_view(xs, EARLY_THRESHOLDS[1])).get(1, 0.5)
-                out[target] = (PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5) * out[target] + 0.5 * pe
+            if expert is not None:  # blend: 0.5 * expert plus 0.5 (late) or PLAYOFF_BASE_WEIGHT (playoffs) * ensemble
+                pe = expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
+                base_weight = PLAYOFF_BASE_WEIGHT if pre["playoffs"] else 0.5
+                out[target] = base_weight * out[target] + 0.5 * pe
         return self.calibrate(pre, out)
 
+    @staticmethod
+    def game_key(pre):
+        return pre["date"], pre["home"], pre["away"]
+
+    def calibrated(self, z, tk):
+        # temperature scaling: a slope on the logit (never changes a pick)
+        return 1 / (1 + math.exp(-self.temperature[tk] * z))
+
     def calibrate(self, pre, out):
-        # temperature scaling: remember each logit until the result arrives
-        key = (pre["date"], pre["home"], pre["away"])
+        # remember each logit until the result arrives
+        key = self.game_key(pre)
         for t in TARGETS:
             z = logit(out[t])
             tk = (t, self.phase(pre, t))
             self.pending[(key, t)] = (z, tk)
-            out[t] = 1 / (1 + math.exp(-self.temperature[tk] * z))
+            out[t] = self.calibrated(z, tk)
         return out
 
     def learn_temperature(self, pre, result):
-        key = (pre["date"], pre["home"], pre["away"])
+        key = self.game_key(pre)
         for t in TARGETS:
             entry = self.pending.pop((key, t), None)
             if entry is not None and result[t] in (0, 1):
                 z, tk = entry
-                p = 1 / (1 + math.exp(-self.temperature[tk] * z))
+                p = self.calibrated(z, tk)
                 self.temperature[tk] = max(TEMPERATURE_MIN, self.temperature[tk] + TEMPERATURE_LR * (result[t] - p) * z)
 
     def learn(self, pre, result):
@@ -193,7 +209,7 @@ class Model:
                     learn_smoothed(model, self.early_view(xs, g), y)
                 expert = self.expert(pre, target, LATE_LEARN_FROM)
                 if expert is not None:
-                    learn_smoothed(expert, self.early_view(xs, EARLY_THRESHOLDS[1]), y)
+                    learn_smoothed(expert, self.expert_view(xs), y)
 
         self.update_state(pre, result)
 
@@ -219,12 +235,17 @@ class Model:
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
         early = self.season_games <= ELO_WARMUP + ELO_EARLY
-        hca = ELO_HOME_ADV + (ELO_EARLY_HCA if early else (ELO_WINTER_HCA if pre["date"].month in (1, 2) else 0))
+        if early:
+            hca = ELO_HOME_ADV + ELO_EARLY_HCA
+        elif pre["date"].month in (1, 2):
+            hca = ELO_HOME_ADV + ELO_WINTER_HCA
+        else:
+            hca = ELO_HOME_ADV
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - hca) / 400))
-        k = ELO_CATCHUP[1] if self.season_games <= ELO_WARMUP + ELO_CATCHUP[0] else ELO_K
+        k = ELO_CATCHUP_K if self.season_games <= ELO_WARMUP + ELO_CATCHUP_GAMES else ELO_K
         delta = k * (int(home_won) - expected_home)
-        if early and abs(self.elo[home] - self.elo[away]) < ELO_TOSSUP[0]:
-            delta *= ELO_TOSSUP[1]
+        if early and abs(self.elo[home] - self.elo[away]) < ELO_TOSSUP_GAP:
+            delta *= ELO_TOSSUP_BOOST
         self.elo[home] += delta
         self.elo[away] -= delta
 
