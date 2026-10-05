@@ -38,6 +38,8 @@ class Model:
         self.season_games = 0
         self.series = defaultdict(int)
         self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(0.005)) for t in TARGETS}  # learn playoff games only
+        self.late_models = {t: linear_model.LogisticRegression(optim.SGD(0.005)) for t in TARGETS}  # learn late regular-season games only
+
 
     @staticmethod
     def gain_fn(thr):
@@ -101,6 +103,10 @@ class Model:
             if pre["playoffs"]:  # playoff games: half from the playoff-only model
                 pp = self.playoff_models[target].predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
                 out[target] = 0.45 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
+            elif target == "id_total" and pre["regular"] and self.season_games > 1000:
+                pp = self.late_models[target].predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
+                out[target] = 0.5 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
+
         return out
 
     def learn(self, pre, result):
@@ -122,6 +128,11 @@ class Model:
                     xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
                     self.playoff_models[target].learn_one(xg, y, w=0.88)
                     self.playoff_models[target].learn_one(xg, 1 - y, w=0.12)
+                elif target == "id_total" and pre["regular"] and self.season_games > 1000:
+                    xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
+                    self.late_models[target].learn_one(xg, y, w=0.88)
+                    self.late_models[target].learn_one(xg, 1 - y, w=0.12)
+
         self.update_state(pre, result)
 
     def update_state(self, pre, result):
