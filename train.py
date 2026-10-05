@@ -316,14 +316,16 @@ class Model:
 
     def segment_lines(self, pre, x, out):
         # segment games: P(1) = Phi(predicted line error / residual sd) of the segment's ridge, fit once per season on previous
-        # seasons' segment games, replacing or blended with the model for that target only
+        # seasons' segment games, replacing or blended with the model for that target only; the context ends with the model's
+        # own logit, so each ridge also learns how far to trust the model in its segment
         if self.segment_reg_season != pre["season"]:
             self.segment_reg_season = pre["season"]
             for seg in SEGMENTS:
                 self.segment_reg[seg] = fit_line_ridge([(f, y) for s, f, y in self.segment_rows[seg] if s < pre["season"]], SEGMENT_RIDGE_MIN)
+        model_logit = {t: logit(p) for t, p in out.items()}
         for seg in self.segments(pre):
             t, weight = SEGMENTS[seg]
-            f = self.segment_context(pre, x, seg)
+            f = self.segment_context(pre, x, seg) + [model_logit[t]]
             self.segment_pending[(self.game_key(pre), seg)] = f
             if self.segment_reg[seg] is not None:
                 out[t] = (1 - weight) * out[t] + weight * line_ridge_prob(self.segment_reg[seg], f)
