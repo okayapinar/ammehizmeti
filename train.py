@@ -40,7 +40,8 @@ VS_LINE_FLOOR = -3.0  # elo_edge_vs_line floor (the upper side never binds)
 TEMPERATURE_LR, TEMPERATURE_MIN = 0.01, 0.05  # online calibration slope on the final logit
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
-SPREAD_FEATURES = ("fav_home", "spread", "elo_edge", "elo_edge_vs_line", "rest_edge")
+ELO_FEATURES = ("elo_edge", "elo_edge_vs_line")  # zero during the Elo warm-up
+SPREAD_FEATURES = ("fav_home", "spread", *ELO_FEATURES, "rest_edge")
 TOTAL_FEATURES = ("fav_home", "spread_raw", "total", "playoffs", "total_centered", "day_game", "wednesday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS),
                   "series_game", "b2b_home", "b2b_away", "b2b_both", "tc_b2b_away", "playoff_saturday")
 
@@ -93,6 +94,7 @@ class Model:
 
     @staticmethod
     def holiday(date):
+        # New Year's Day or Martin Luther King Day (third Monday of January)
         if (date.month, date.day) == (1, 1):
             return True
         return date.month == 1 and date.weekday() == 0 and 15 <= date.day <= 21
@@ -132,7 +134,7 @@ class Model:
             "series_game": self.series_game(pre),
             "b2b_home": b2b_home,
             "b2b_away": b2b_away,
-            "b2b_both": float(rest_home <= 1 and rest_away <= 1),
+            "b2b_both": b2b_home * b2b_away,
             "tc_b2b_away": total_centered * b2b_away,
             "playoff_saturday": float(pre["playoffs"] and date.weekday() == 5),
         }
@@ -203,7 +205,7 @@ class Model:
                 xt = self.view(x, target)
                 xs = self.scalers[target].transform_one(xt)  # same scaling as at predict time
                 if target == "id_spread" and self.season_games <= ELO_WARMUP:
-                    xt = {k: v for k, v in xt.items() if k not in ("elo_edge", "elo_edge_vs_line")}  # zeroed Elo features do not shape the scaler
+                    xt = {k: v for k, v in xt.items() if k not in ELO_FEATURES}  # zeroed Elo features do not shape the scaler
                 self.scalers[target].learn_one(xt)
                 for g, model in models:
                     learn_smoothed(model, self.early_view(xs, g), y)
@@ -226,8 +228,8 @@ class Model:
         self.update_elo(pre, result)
         if pre["total"]:
             self.mean_total = pre["total"] if self.mean_total is None else self.mean_total + LINE_ALPHA * (pre["total"] - self.mean_total)
-        self.last_game[pre["home"]] = pre["date"]
-        self.last_game[pre["away"]] = pre["date"]
+        for team in (pre["home"], pre["away"]):
+            self.last_game[team] = pre["date"]
 
     def update_elo(self, pre, result):
         if pre["playoffs"] or self.season_games <= ELO_WARMUP:  # no playoff updates; skip the first ~5 games per team (rotation noise)
