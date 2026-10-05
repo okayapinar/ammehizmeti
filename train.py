@@ -202,7 +202,7 @@ class Model:
         # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
         # spread - the lone playoff-bubble team covers; total - a team's last regular-season game or two lottery teams go over
         rules = {}
-        if pre["regular"] and not pre["playoffs"]:
+        if pre["regular"] and not pre["playoffs"] and pre["season"] == self.season:  # standings are last season's until the first result
             fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
             bubble = int(self.bubble(fav)) - int(self.bubble(dog))
             if bubble:
