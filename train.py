@@ -308,8 +308,7 @@ class Model:
         fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
         rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
         if SEGMENTS[seg][0] == "id_spread":
-            extra = {"ats_streak": [self.ats_streak(pre, fav), self.ats_streak(pre, dog)],
-                     "line_chase": [*self.line_chase(pre, fav), *self.line_chase(pre, dog)]}.get(seg, [])
+            extra = {"ats_streak": [self.ats_streak(pre, fav), self.ats_streak(pre, dog)]}.get(seg, [])
             return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
         return [x["fav_home"], x["spread"], x["total_centered"], x["total"], min(rest_fav, rest_dog), rest_fav - rest_dog]
 
