@@ -45,11 +45,8 @@ PLAYOFF_RIDGE_MIN, SEGMENT_RIDGE_MIN = 200, 60  # past games a playoff / segment
 ALTITUDE = ("den", "utah")  # high-altitude home courts
 # regular-season segments with their own line-error ridge: name -> (target, weight of the ridge probability)
 SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5), "ats_streak": ("id_spread", 0.5),
-            "line_chase": ("id_spread", 0.5), "prev_ot": ("id_spread", 0.5), "backdoor": ("id_spread", 0.5)}
-LINE_CHASE_MOVE, LINE_CHASE_HCA = 12.0, 2.5  # venue-adjusted line move (points) since the team's previous game; home edge removed from lines
+            "prev_ot": ("id_spread", 0.5)}
 ATS_STREAK_GAMES, ATS_STREAK_MEAN = 3, 14.0  # a team's last 3 line errors share a sign with mean |error| >= 14 points
-# backdoor: a favourite of 8+ whose mean Q4 margin with a 15+ lead after three quarters (5+ such games) is 2+ points off the league's
-BACKDOOR_SPREAD, BACKDOOR_LEAD, BACKDOOR_GAMES, BACKDOOR_GAP = 8.0, 15, 5, 2.0
 FAV_LEAN, FAV_LEAN_ATS_GAP = 0.06051, -2.75  # fav_lean router: model spread logit above this, favourite's last-5 ATS form minus the underdog's above this
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
@@ -112,11 +109,8 @@ class Model:
         self.segment_rows = {seg: [] for seg in SEGMENTS}  # past segment games: (season, context, line error)
         self.segment_pending = {}
         self.segment_reg, self.segment_reg_season = {}, None
-        self.venue_lines = {}  # (season, team) -> its last regular-season game's venue-adjusted line
         self.line_errors = defaultdict(list)  # (season, team) -> its regular-season line errors (margin minus line-implied margin)
         self.last_ot = {}  # (season, team) -> whether its last regular-season game went to overtime
-        self.blowout_q4 = defaultdict(list)  # (season, team) -> its Q4 margins in regular-season games it led by 15+ after three quarters
-        self.league_q4 = [0.0, 0]  # sum and count of all those Q4 margins (all history)
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
         self.routed = {}
@@ -273,8 +267,7 @@ class Model:
 
     def segments(self, pre):
         # the game's regular-season segments: the visitor on a back-to-back at altitude; a rest mismatch (one team on a
-        # back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a line that chased a team's last
-        # result; a team whose previous game went to overtime; a big favourite that eases off (or keeps pressing) with a big lead
+        # back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a team whose previous game went to overtime
         fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
         rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
         segs = []
@@ -284,34 +277,9 @@ class Model:
             segs.append("rest_mismatch")
         if self.ats_streak(pre, fav) or self.ats_streak(pre, dog):
             segs.append("ats_streak")
-        if self.line_chase(pre, fav) or self.line_chase(pre, dog):
-            segs.append("line_chase")
         if self.last_ot.get((pre["season"], fav)) or self.last_ot.get((pre["season"], dog)):
             segs.append("prev_ot")
-        if pre["spread"] >= BACKDOOR_SPREAD and abs(self.blowout_q4_gap(pre, fav)) >= BACKDOOR_GAP:
-            segs.append("backdoor")
         return segs
-
-    def blowout_q4_gap(self, pre, team):
-        # the team's mean Q4 margin with a 15+ lead after three quarters minus the league's (backdoor covers when < 0), 0 below 5 games
-        q4 = self.blowout_q4[(pre["season"], team)]
-        if len(q4) < BACKDOOR_GAMES:
-            return 0.0
-        return sum(q4) / len(q4) - self.league_q4[0] / self.league_q4[1]
-
-    @staticmethod
-    def venue_line(pre, team):
-        # the team's line-implied margin without the home edge
-        home_margin = pre["spread"] if pre["whos_favored"] == "home" else -pre["spread"]
-        return home_margin - LINE_CHASE_HCA if team == pre["home"] else -home_margin + LINE_CHASE_HCA
-
-    def line_chase(self, pre, team):
-        # the team's venue-adjusted line moved 12+ points since its previous regular-season game, toward that game's line error
-        key = (pre["season"], team)
-        if key not in self.venue_lines:
-            return False
-        move = self.venue_line(pre, team) - self.venue_lines[key]
-        return abs(move) >= LINE_CHASE_MOVE and move * self.line_errors[key][-1] > 0
 
     def ats_streak(self, pre, team):
         # the sum of the team's last line errors this season when they share a sign and are big (an ATS run the market may overprice), else 0
@@ -325,7 +293,7 @@ class Model:
         fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
         rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
         if SEGMENTS[seg][0] == "id_spread":
-            extra = {"ats_streak": [self.ats_streak(pre, fav), self.ats_streak(pre, dog)], "backdoor": [self.blowout_q4_gap(pre, fav)]}.get(seg, [])
+            extra = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)] if seg == "ats_streak" else []
             return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
         return [x["fav_home"], x["spread"], x["total_centered"], x["total"], min(rest_fav, rest_dog), rest_fav - rest_dog]
 
@@ -434,16 +402,7 @@ class Model:
             self.line_errors[(pre["season"], pre["home"])].append(errors["id_spread"] if pre["whos_favored"] == "home" else -errors["id_spread"])
             self.line_errors[(pre["season"], pre["away"])].append(-errors["id_spread"] if pre["whos_favored"] == "home" else errors["id_spread"])
             for team in (pre["home"], pre["away"]):
-                self.venue_lines[(pre["season"], team)] = self.venue_line(pre, team)
-            for team in (pre["home"], pre["away"]):
                 self.last_ot[(pre["season"], team)] = (result["ot_home"] or 0) + (result["ot_away"] or 0) > 0
-            q3_margin = sum(result[f"q{i}_home"] - result[f"q{i}_away"] for i in (1, 2, 3))
-            q4_margin = result["q4_home"] - result["q4_away"]
-            for team, lead, q4 in ((pre["home"], q3_margin, q4_margin), (pre["away"], -q3_margin, -q4_margin)):
-                if lead >= BACKDOOR_LEAD:
-                    self.blowout_q4[(pre["season"], team)].append(q4)
-                    self.league_q4[0] += q4
-                    self.league_q4[1] += 1
 
         self.update_state(pre, result)
 
