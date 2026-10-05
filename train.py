@@ -43,6 +43,10 @@ SEASON_LENGTH = {2012: 66, 2020: 72, 2021: 72}  # shortened seasons (lockout, pa
 STAKES_FROM = 60  # team games played before the standings define a playoff-bubble team
 TEMPERATURE_LR, TEMPERATURE_MIN = 0.01, 0.05  # online calibration slope on the final logit
 PLAYOFF_RIDGE_ALPHA, PLAYOFF_RIDGE_MIN = 10.0, 200  # playoff line-error regression: ridge penalty, past playoff games needed
+SEGMENT_RIDGE_ALPHA, SEGMENT_RIDGE_MIN = 10.0, 60  # regular-season segment line-error regressions: ridge penalty, past segment games needed
+ALTITUDE = ("den", "utah")  # high-altitude home courts
+# regular-season segments with their own line-error ridge: name -> (target, weight of the ridge probability)
+SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5)}
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
 ELO_FEATURES = ("elo_edge", "elo_edge_vs_line")  # zero during the Elo warm-up
@@ -85,6 +89,9 @@ class Model:
         self.playoff_rows = {t: [] for t in TARGETS}  # past playoff games: (season, context, line error: favourite's margin / total residual)
         self.playoff_pending = {}
         self.playoff_reg, self.playoff_reg_season = {}, None
+        self.segment_rows = {seg: [] for seg in SEGMENTS}  # past segment games: (season, context, line error)
+        self.segment_pending = {}
+        self.segment_reg, self.segment_reg_season = {}, None
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
         self.routed = {}
@@ -201,6 +208,8 @@ class Model:
                 out[target] = 0.5 * out[target] + 0.5 * expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
         if pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
             self.playoff_lines(pre, x, out)
+        if pre["regular"] and not pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
+            self.segment_lines(pre, x, out)
         self.route(pre, out)
         return self.calibrate(pre, out)
 
@@ -243,6 +252,48 @@ class Model:
                 mu = reg.predict(scaler.transform([f]))[0]
                 p = 0.5 * (1 + math.erf(mu / sd / math.sqrt(2)))
                 out[t] = p if t == "id_spread" else 0.5 * out[t] + 0.5 * p
+
+    def segments(self, pre):
+        # the game's regular-season segments: the visitor on a back-to-back at altitude; a rest mismatch (one team on a
+        # back-to-back, the other with 2+ more days of rest)
+        fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
+        rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
+        segs = []
+        if pre["home"] in ALTITUDE and self.rest_days(pre["away"], pre["date"]) <= 1:
+            segs.append("altitude_b2b")
+        if abs(rest_fav - rest_dog) >= 2 and min(rest_fav, rest_dog) <= 1:
+            segs.append("rest_mismatch")
+        return segs
+
+    def segment_context(self, pre, x, seg):
+        # line, venue, total level and rest (spread: per side; total: the shorter rest and the favourite's rest edge)
+        fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
+        rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
+        if SEGMENTS[seg][0] == "id_spread":
+            return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog]
+        return [x["fav_home"], x["spread"], x["total_centered"], x["total"], min(rest_fav, rest_dog), rest_fav - rest_dog]
+
+    def segment_lines(self, pre, x, out):
+        # segment games: P(1) = Phi(predicted line error / residual sd) of the segment's ridge, fit once per season on previous
+        # seasons' segment games, replacing or blended with the model for that target only
+        if self.segment_reg_season != pre["season"]:
+            self.segment_reg_season = pre["season"]
+            for seg in SEGMENTS:
+                rows = [(f, y) for s, f, y in self.segment_rows[seg] if s < pre["season"]]
+                self.segment_reg[seg] = None
+                if len(rows) >= SEGMENT_RIDGE_MIN:
+                    X, y = np.array([f for f, _ in rows]), np.array([y for _, y in rows])
+                    scaler = StandardScaler().fit(X)
+                    reg = Ridge(alpha=SEGMENT_RIDGE_ALPHA).fit(scaler.transform(X), y)
+                    self.segment_reg[seg] = (scaler, reg, (y - reg.predict(scaler.transform(X))).std())
+        for seg in self.segments(pre):
+            t, weight = SEGMENTS[seg]
+            f = self.segment_context(pre, x, seg)
+            self.segment_pending[(self.game_key(pre), seg)] = f
+            if self.segment_reg[seg] is not None:
+                scaler, reg, sd = self.segment_reg[seg]
+                p = 0.5 * (1 + math.erf(reg.predict(scaler.transform([f]))[0] / sd / math.sqrt(2)))
+                out[t] = (1 - weight) * out[t] + weight * p
 
     def route(self, pre, out):
         # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
@@ -317,6 +368,10 @@ class Model:
             f = self.playoff_pending.pop((self.game_key(pre), t), None)
             if f is not None:
                 self.playoff_rows[t].append((pre["season"], f, errors[t]))
+        for seg, (t, _) in SEGMENTS.items():
+            f = self.segment_pending.pop((self.game_key(pre), seg), None)
+            if f is not None:
+                self.segment_rows[seg].append((pre["season"], f, errors[t]))
 
         self.update_state(pre, result)
 
