@@ -128,7 +128,7 @@ class Model:
                     xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
                     self.playoff_models[target].learn_one(xg, y, w=0.88)
                     self.playoff_models[target].learn_one(xg, 1 - y, w=0.12)
-                elif pre["regular"] and self.season_games > (1000 if target == "id_total" else 1150):
+                elif pre["regular"] and self.season_games > (950 if target == "id_total" else 1150):
                     xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
                     self.late_models[target].learn_one(xg, y, w=0.88)
                     self.late_models[target].learn_one(xg, 1 - y, w=0.12)
