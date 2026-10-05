@@ -19,11 +19,25 @@ ELO_HOME_ADV = 55
 ELO_WARMUP = 75  # league games per season before Elo is updated or used (~5 games per team)
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
-
-
 EARLY_THRESHOLDS = (60, 120, 190)
+PROB_CLIP = (0.42, 0.58)  # member and expert probabilities are clipped to this range
+SMOOTH_WEIGHTS = (0.88, 0.12)  # label smoothing: weight of the observed label and of the opposite label
+# phase experts: league game after which the late-season expert votes / learns, per target
+LATE_PREDICT_FROM = {"id_total": 1000, "id_spread": 1150}
+LATE_LEARN_FROM = {"id_total": 950, "id_spread": 1150}
 
 TOTAL_DROP = ("elo_edge_vs_line", "rest_edge", "elo_edge", "spread")
+SPREAD_DROP = ("total", "playoffs", "spread_raw", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday",
+               "series_game", "tc_b2b_away", "playoff_saturday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS))
+
+
+def clip(p):
+    return min(max(p, PROB_CLIP[0]), PROB_CLIP[1])
+
+
+def learn_smoothed(model, x, y):
+    model.learn_one(x, y, w=SMOOTH_WEIGHTS[0])
+    model.learn_one(x, 1 - y, w=SMOOTH_WEIGHTS[1])
 
 
 class Model:
@@ -39,7 +53,6 @@ class Model:
         self.series = defaultdict(int)
         self.playoff_models = {t: linear_model.LogisticRegression(optim.SGD(0.006)) for t in TARGETS}  # learn playoff games only
         self.late_models = {t: linear_model.LogisticRegression(optim.SGD(0.0065)) for t in TARGETS}  # learn late regular-season games only
-
 
     @staticmethod
     def gain_fn(thr):
@@ -85,28 +98,28 @@ class Model:
         return x
 
     def view(self, x, target):
-        if target == "id_total":
-            return {k: v for k, v in x.items() if k not in TOTAL_DROP}
-        return {k: v for k, v in x.items() if k not in ("total", "playoffs", "spread_raw", "total_centered", "b2b_home", "b2b_away", "b2b_both", "day_game", "wednesday", "series_game", "tc_b2b_away", "playoff_saturday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS))}
+        drop = TOTAL_DROP if target == "id_total" else SPREAD_DROP
+        return {k: v for k, v in x.items() if k not in drop}
+
+    def expert(self, pre, target, start):
+        # phase expert for this game: playoff-only model, late regular-season model, or none
+        if pre["playoffs"]:
+            return self.playoff_models[target]
+        if pre["regular"] and self.season_games > start[target]:
+            return self.late_models[target]
+        return None
 
     def predict(self, pre):
         x = self.features(pre)
         out = {}
         for target, models in self.models.items():
             xs = self.scalers[target].transform_one(self.view(x, target))
-            ps = []
-            for g, model in models:
-                proba = model.predict_proba_one(self.gain_fn(g)(xs))
-                p0, p1 = proba.get(0, 0.0), proba.get(1, 0.0)
-                ps.append(min(max(p1 / (p0 + p1) if p0 + p1 > 0 else 0.5, 0.42), 0.58))  # member probabilities clipped
+            ps = [clip(model.predict_proba_one(self.gain_fn(g)(xs)).get(1, 0.5)) for g, model in models]
             out[target] = sum(ps) / len(ps)
-            if pre["playoffs"]:  # playoff games: half from the playoff-only model
-                pp = self.playoff_models[target].predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
-                out[target] = 0.45 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
-            elif pre["regular"] and self.season_games > (1000 if target == "id_total" else 1150):
-                pp = self.late_models[target].predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5)
-                out[target] = 0.5 * out[target] + 0.5 * min(max(pp, 0.42), 0.58)
-
+            expert = self.expert(pre, target, LATE_PREDICT_FROM)
+            if expert is not None:  # half from the phase expert (the playoff blend keeps the base's 0.45 weight)
+                pe = clip(expert.predict_proba_one(self.gain_fn(EARLY_THRESHOLDS[1])(xs)).get(1, 0.5))
+                out[target] = (0.45 if pre["playoffs"] else 0.5) * out[target] + 0.5 * pe
         return out
 
     def learn(self, pre, result):
@@ -120,18 +133,10 @@ class Model:
                     xt = {k: v for k, v in xt.items() if k not in ("elo_edge", "elo_edge_vs_line")}  # zeroed Elo features do not shape the scaler
                 self.scalers[target].learn_one(xt)
                 for g, model in models:
-                    xg = self.gain_fn(g)(xs)
-                    # label smoothing: learn y with weight 0.88 and the opposite label with weight 0.12
-                    model.learn_one(xg, y, w=0.88)
-                    model.learn_one(xg, 1 - y, w=0.12)
-                if pre["playoffs"]:
-                    xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
-                    self.playoff_models[target].learn_one(xg, y, w=0.88)
-                    self.playoff_models[target].learn_one(xg, 1 - y, w=0.12)
-                elif pre["regular"] and self.season_games > (950 if target == "id_total" else 1150):
-                    xg = self.gain_fn(EARLY_THRESHOLDS[1])(xs)
-                    self.late_models[target].learn_one(xg, y, w=0.88)
-                    self.late_models[target].learn_one(xg, 1 - y, w=0.12)
+                    learn_smoothed(model, self.gain_fn(g)(xs), y)
+                expert = self.expert(pre, target, LATE_LEARN_FROM)
+                if expert is not None:
+                    learn_smoothed(expert, self.gain_fn(EARLY_THRESHOLDS[1])(xs), y)
 
         self.update_state(pre, result)
 
