@@ -112,7 +112,7 @@ class Model:
         return 0.0 if pre["regular"] else PLAY_IN_SERIES
 
     def bubble(self, team):
-        # late season: a playoff-bubble team (seeds 7-9, 7-10 since the play-in) that has neither clinched nor been eliminated
+        # late season: a playoff-bubble team (seeds 7-9, 7-10 since the play-in)
         wins, losses = self.record[team]
         length = SEASON_LENGTH.get(self.season, 82)
         left = length - wins - losses
@@ -120,11 +120,7 @@ class Model:
             return False
         mates = [(w, l) for t, (w, l) in self.record.items() if t != team and CONFERENCE.get(t) == CONFERENCE.get(team)]
         rank = 1 + sum(w - l > wins - losses for w, l in mates)
-        play_in = self.season >= 2021
-        direct, last_in = (6, 10) if play_in else (8, 8)
-        clinched = sum(w + (length - w - l) >= wins for w, l in mates) < direct
-        eliminated = sum(w > wins + left for w, l in mates) >= last_in
-        return 7 <= rank <= (10 if play_in else 9) and not clinched and not eliminated
+        return 7 <= rank <= (10 if self.season >= 2021 else 9)
 
     def features(self, pre):
         home, away, date = pre["home"], pre["away"], pre["date"]
