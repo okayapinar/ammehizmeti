@@ -111,16 +111,23 @@ class Model:
             return float(min(self.series[frozenset((pre["home"], pre["away"]))] + 1, SERIES_CAP))
         return 0.0 if pre["regular"] else PLAY_IN_SERIES
 
-    def bubble(self, team):
-        # late season: a playoff-bubble team (seeds 7-9, 7-10 since the play-in)
+    def late_rank(self, team):
+        # late season (60+ team games, games left): conference rank by wins minus losses, else None
         wins, losses = self.record[team]
-        length = SEASON_LENGTH.get(self.season, 82)
-        left = length - wins - losses
-        if wins + losses < STAKES_FROM or left <= 0:
-            return False
+        if wins + losses < STAKES_FROM or wins + losses >= SEASON_LENGTH.get(self.season, 82):
+            return None
         mates = [(w, l) for t, (w, l) in self.record.items() if t != team and CONFERENCE.get(t) == CONFERENCE.get(team)]
-        rank = 1 + sum(w - l > wins - losses for w, l in mates)
-        return 7 <= rank <= (10 if self.season >= 2021 else 9)
+        return 1 + sum(w - l > wins - losses for w, l in mates)
+
+    def bubble(self, team):
+        # a playoff-bubble team (seeds 7-9, 7-10 since the play-in)
+        rank = self.late_rank(team)
+        return rank is not None and 7 <= rank <= (10 if self.season >= 2021 else 9)
+
+    def lottery(self, team):
+        # out of the playoff picture (below seed 8, seed 10 since the play-in)
+        rank = self.late_rank(team)
+        return rank is not None and rank > (10 if self.season >= 2021 else 8)
 
     def final_game(self, team):
         # the team's last regular-season game
@@ -193,7 +200,7 @@ class Model:
 
     def route(self, pre, out):
         # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
-        # spread - the lone playoff-bubble team covers; total - a team's last regular-season game goes over (rest, nothing to play for)
+        # spread - the lone playoff-bubble team covers; total - a team's last regular-season game or two lottery teams go over
         rules = {}
         if pre["regular"] and not pre["playoffs"]:
             fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
@@ -202,6 +209,8 @@ class Model:
                 rules["id_spread"] = ("bubble", bubble)
             if self.final_game(fav) or self.final_game(dog):
                 rules["id_total"] = ("final", 1)
+            elif self.lottery(fav) and self.lottery(dog):
+                rules["id_total"] = ("lottery", 1)  # two lottery teams: little defence late in the season
         for t, (rule, side) in rules.items():
             self.routed[(self.game_key(pre), t)] = (rule, side)
             hits, n = self.route_rate[rule]
