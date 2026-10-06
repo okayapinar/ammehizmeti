@@ -30,7 +30,7 @@ LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 EARLY_THRESHOLDS = (60, 120, 190)
 SMOOTH_LABEL_W, SMOOTH_FLIP_W = 0.88, 0.12  # label smoothing: weight of the observed label and of the opposite label
-LATE_PREDICT_FROM, LATE_LEARN_FROM = 1000, 950  # late-season total expert: league game after which it votes / learns
+LATE_PREDICT_LEFT, LATE_LEARN_LEFT = 230, 280  # late-season total expert: votes / learns in the last this many league games of the regular season
 LATE_EXPERT_LR = 0.0065
 SPREAD_CAP, TOTAL_CAP = 19.0, 250.0  # line caps for the model features (spread_raw keeps the uncapped spread)
 SERIES_CAP = 4  # playoff series game number is capped (games 4+ look alike)
@@ -219,16 +219,16 @@ class Model:
         keep = TOTAL_FEATURES if target == "id_total" else SPREAD_FEATURES
         return {k: v for k, v in x.items() if k in keep}
 
-    def phase(self, pre, target, late_from=LATE_PREDICT_FROM):
+    def phase(self, pre, target, late_left=LATE_PREDICT_LEFT):
         if pre["playoffs"]:
             return "playoff"
-        if pre["regular"] and target == "id_total" and self.season_games > late_from:
+        if pre["regular"] and target == "id_total" and self.season_games > 15 * SEASON_LENGTH.get(pre["season"], 82) - late_left:  # 30 teams: 15 league games per team game
             return "late"
         return "early" if self.season_games < EARLY_THRESHOLDS[1] else "main"
 
-    def expert(self, pre, target, late_from):
+    def expert(self, pre, target, late_left):
         # the late regular-season expert for late total games, else None
-        return self.late_model if self.phase(pre, target, late_from) == "late" else None
+        return self.late_model if self.phase(pre, target, late_left) == "late" else None
 
     def predict(self, pre):
         x = self.features(pre)
@@ -237,7 +237,7 @@ class Model:
             xs = self.scalers[target].transform_one(self.view(x, target))
             ps = [model.predict_proba_one(self.early_view(xs, g)).get(1, 0.5) for g, model in models]
             out[target] = sum(ps) / len(ps)
-            expert = self.expert(pre, target, LATE_PREDICT_FROM)
+            expert = self.expert(pre, target, LATE_PREDICT_LEFT)
             if expert is not None:  # 50/50 blend with the late expert
                 out[target] = 0.5 * out[target] + 0.5 * expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
         spread_logit = logit(out["id_spread"])  # the model's own spread lean (regular season: before segments and routers)
@@ -402,7 +402,7 @@ class Model:
                 self.scalers[target].learn_one(xt)
                 for g, model in models:
                     learn_smoothed(model, self.early_view(xs, g), y)
-                expert = self.expert(pre, target, LATE_LEARN_FROM)
+                expert = self.expert(pre, target, LATE_LEARN_LEFT)
                 if expert is not None:
                     learn_smoothed(expert, self.expert_view(xs), y)
         margin = result["score_home"] - result["score_away"]
