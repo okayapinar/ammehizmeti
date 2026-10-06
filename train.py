@@ -133,6 +133,15 @@ class Model:
         return min((date - self.last_game[team]).days, MAX_REST_DAYS)
 
     @staticmethod
+    def sides(pre):
+        # (favourite, underdog)
+        return (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
+
+    def short_rest(self, pre):
+        # the favourite's and the underdog's rest days, capped at 4
+        return tuple(min(self.rest_days(team, pre["date"]), 4) for team in self.sides(pre))
+
+    @staticmethod
     def holiday(date):
         # New Year's Day or Martin Luther King Day (third Monday of January)
         if (date.month, date.day) == (1, 1):
@@ -243,10 +252,10 @@ class Model:
         # playoff context: line, series game, round, rest and the series' previous game -
         # spread: venue, rest edge, the favourite's line error and the total residual there;
         # total: its regulation total residual, overtime points and the total line move since
-        fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
+        fav, dog = self.sides(pre)
         played = self.playoff_opponents[pre["home"]]
         rnd = min(len(played) + (pre["away"] not in played), 4)
-        rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
+        rest_fav, rest_dog = self.short_rest(pre)
         last = self.series_last.get(frozenset((fav, dog)))
         if target == "id_total":
             return [x["total_centered"], x["total"], x["spread"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
@@ -275,8 +284,8 @@ class Model:
         # the game's regular-season segments: the visitor on a back-to-back at altitude; a rest mismatch (one team on a
         # back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a team whose previous game went to overtime;
         # a contending favourite on the second night of a back-to-back (load management)
-        fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
-        rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
+        fav, dog = self.sides(pre)
+        rest_fav, rest_dog = self.short_rest(pre)
         segs = []
         if pre["home"] in ALTITUDE and self.rest_days(pre["away"], pre["date"]) <= 1:
             segs.append("altitude_b2b")
@@ -299,8 +308,8 @@ class Model:
 
     def segment_context(self, pre, x, seg):
         # line, venue, total level and rest (spread: per side; total: the shorter rest and the favourite's rest edge)
-        fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
-        rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
+        fav, dog = self.sides(pre)
+        rest_fav, rest_dog = self.short_rest(pre)
         if SEGMENTS[seg][0] == "id_spread":
             extra = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)] if seg == "ats_streak" else []
             return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
@@ -334,7 +343,7 @@ class Model:
         # total - a team's last regular-season game or two lottery teams go over
         rules = {}
         if pre["regular"] and not pre["playoffs"] and pre["season"] == self.season:  # standings are last season's until the first result
-            fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
+            fav, dog = self.sides(pre)
             if spread_logit > FAV_LEAN and self.ats_form(pre, fav) - self.ats_form(pre, dog) > FAV_LEAN_ATS_GAP:
                 rules["id_spread"] = ("fav_lean", -1)  # the model's favourite leans over-trust the favourite
             elif self.bubble(fav) != self.bubble(dog):
