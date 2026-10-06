@@ -14,7 +14,7 @@ from river import linear_model, optim, preprocessing
 from sklearn.linear_model import Ridge
 from sklearn.preprocessing import StandardScaler
 
-from prepare import PUSH, TARGETS, evaluate, load_team_maps, print_summary
+from prepare import TARGETS, evaluate, load_team_maps, print_summary
 
 MAX_REST_DAYS = 20
 ELO_K = 20.5
@@ -34,11 +34,11 @@ LATE_PREDICT_LEFT, LATE_LEARN_LEFT = 230, 280  # late-season total expert: votes
 LATE_EXPERT_LR = 0.0065
 SPREAD_CAP, TOTAL_CAP = 19.0, 250.0  # line caps for the model features (spread_raw keeps the uncapped spread)
 SERIES_CAP = 4  # playoff series game number is capped (games 4+ look alike)
-PLAY_IN_SERIES = 0.7  # series_game code for play-in games
+PLAY_IN_SERIES = 0.7  # series_game code for the other non-regular games (play-in, NBA Cup final)
 VS_LINE_FLOOR = -3.0  # elo_edge_vs_line floor (the upper side never binds)
 CONFERENCE = load_team_maps()[1]
 SEASON_LENGTH = {2012: 66, 2021: 72}  # shortened seasons (lockout, pandemic); 82 otherwise (2019-20 ended unevenly at 64-75 games: no final game)
-STAKES_FROM = 60  # team games played before the standings define a playoff-bubble team
+STAKES_FROM = 60  # team games played before the standings define a playoff-bubble or lottery team
 TEMPERATURE_LR, TEMPERATURE_MIN = 0.01, 0.05  # online calibration slope on the final logit
 RIDGE_ALPHA = 10.0  # penalty of the line-error ridges (playoffs, regular-season segments)
 RIDGE_MIN = 60  # past games a line-error ridge needs
@@ -47,11 +47,11 @@ ALTITUDE = ("den", "utah")  # high-altitude home courts
 SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5), "ats_streak": ("id_spread", 0.5),
             "prev_ot": ("id_spread", 0.5), "contender_b2b": ("id_spread", 0.5)}
 ATS_STREAK_GAMES, ATS_STREAK_MEAN = 3, 14.0  # a team's last 3 line errors share a sign with mean |error| >= 14 points
-CONTENDER_GAMES, CONTENDER_PCT = 41, 0.6  # load management: a .600+ team in the second half of its season
+CONTENDER_GAMES, CONTENDER_PCT = 41, 0.6  # load management: a .600+ team with 41+ games played
 FAV_LEAN, FAV_LEAN_ATS_GAP = 0.06051, -2.75  # fav_lean router: model spread logit above this, favourite's last-5 ATS form minus the underdog's above this
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
-ELO_FEATURES = ("elo_edge", "elo_edge_vs_line")  # zero during the Elo warm-up
+ELO_FEATURES = ("elo_edge", "elo_edge_vs_line")  # raw 0 during the Elo warm-up (after scaling a constant: an implicit warm-up indicator)
 SPREAD_FEATURES = ("fav_home", "spread", *ELO_FEATURES, "rest_edge")
 TOTAL_FEATURES = ("fav_home", "spread_raw", "total", "playoffs", "total_centered", "day_game", "wednesday", *(f"early_{thr}" for thr in EARLY_THRESHOLDS),
                   "series_game", "b2b_home", "b2b_away", "b2b_both", "tc_b2b_away", "playoff_saturday")
@@ -146,7 +146,7 @@ class Model:
         return date.month == 1 and date.weekday() == 0 and 15 <= date.day <= 21
 
     def series_game(self, pre):
-        # playoff series game number (capped), a fixed code for play-in games, 0 in the regular season
+        # playoff series game number (capped), a fixed code for the other non-regular games (play-in, Cup final), 0 in the regular season
         if pre["playoffs"]:
             return float(min(self.series[frozenset((pre["home"], pre["away"]))] + 1, SERIES_CAP))
         return 0.0 if pre["regular"] else PLAY_IN_SERIES
@@ -165,7 +165,7 @@ class Model:
         return rank is not None and 7 <= rank <= 10
 
     def lottery(self, team):
-        # out of the playoff picture (below seed 8, seed 10 since the play-in)
+        # out of the playoff picture (below seed 8, seed 10 since the play-in; before it, seeds 9-10 are also bubble teams)
         rank = self.late_rank(team)
         return rank is not None and rank > (10 if self.season >= 2021 else 8)
 
@@ -174,7 +174,7 @@ class Model:
         return sum(self.record[team]) == SEASON_LENGTH.get(self.season, 82) - 1
 
     def contender(self, team):
-        # a .600+ team in the second half of its season (stars' minutes are managed for the playoffs)
+        # a .600+ team with 41+ games played (stars' minutes are managed for the playoffs)
         wins, losses = self.record[team]
         return wins + losses >= CONTENDER_GAMES and wins / (wins + losses) >= CONTENDER_PCT
 
@@ -243,8 +243,8 @@ class Model:
         self.route(pre, out, spread_logit)
         return self.calibrate(pre, out)
 
-    def playoff_context(self, pre, x, target):
-        # playoff context: line, series game, round, rest and the series' previous game -
+    def playoff_context(self, pre, x):
+        # playoff context per target: line, series game, round, rest and the series' previous game -
         # spread: venue, rest edge, the favourite's line error and the total residual there;
         # total: its regulation total residual, overtime points and the total line move since
         fav, dog = self.sides(pre)
@@ -252,11 +252,10 @@ class Model:
         rnd = min(len(played) + (pre["away"] not in played), 4)
         rest_fav, rest_dog = self.short_rest(pre)
         last = self.series_last.get(frozenset((fav, dog)))
-        if target == "id_total":
-            return [x["total_centered"], x["spread"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
-                    min(rest_fav, rest_dog), last[1] - last[2] if last else 0.0, last[2] if last else 0.0, pre["total"] - last[3] if last else 0.0]
-        return [x["fav_home"], x["spread"], x["total_centered"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
-                min(rest_fav, rest_dog), rest_fav - rest_dog, last[0][fav] if last else 0.0, last[1] if last else 0.0]
+        return {"id_spread": [x["fav_home"], x["spread"], x["total_centered"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
+                              min(rest_fav, rest_dog), rest_fav - rest_dog, last[0][fav] if last else 0.0, last[1] if last else 0.0],
+                "id_total": [x["total_centered"], x["spread"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
+                             min(rest_fav, rest_dog), last[1] - last[2] if last else 0.0, last[2] if last else 0.0, pre["total"] - last[3] if last else 0.0]}
 
     def fit_ridges(self, season):
         # once per season: the line-error ridges (playoffs per target, regular-season segments) on all previous seasons' games
@@ -268,25 +267,29 @@ class Model:
 
     def playoff_lines(self, pre, x, out):
         # playoff games: P(1) = Phi(predicted line error / residual sd) of the playoff regressions (spread: replaces the model; total: 50/50)
-        for t in TARGETS:
-            f = self.playoff_context(pre, x, t)
+        for t, f in self.playoff_context(pre, x).items():
             self.pending[self.game_key(pre)]["playoff"][t] = f
             if self.playoff_reg[t] is not None:
                 p = line_ridge_prob(self.playoff_reg[t], f)
                 out[t] = p if t == "id_spread" else 0.5 * out[t] + 0.5 * p
 
-    def segments(self, pre):
+    def segments(self, pre, x):
         # the game's regular-season segments, in SEGMENTS order: the visitor on a back-to-back at altitude; a rest mismatch (one team
         # on a back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a team whose previous game went to
-        # overtime; a contending favourite on the second night of a back-to-back (load management)
+        # overtime; a contending favourite on the second night of a back-to-back (load management).
+        # Each with its ridge context: line, venue, total deviation from the league level and rest (spread: per side, plus both ATS
+        # streaks in ats_streak; total: the favourite's rest edge - the shorter rest is always 1 in rest_mismatch)
         fav, dog = self.sides(pre)
         rest_fav, rest_dog = self.short_rest(pre)
+        streaks = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)]
         fired = {"altitude_b2b": pre["home"] in ALTITUDE and self.rest_days(pre["away"], pre["date"]) <= 1,
                  "rest_mismatch": abs(rest_fav - rest_dog) >= 2 and min(rest_fav, rest_dog) <= 1,
-                 "ats_streak": self.ats_streak(pre, fav) or self.ats_streak(pre, dog),
+                 "ats_streak": any(streaks),
                  "prev_ot": self.last_ot.get((pre["season"], fav)) or self.last_ot.get((pre["season"], dog)),
                  "contender_b2b": self.contender(fav) and rest_fav <= 1}
-        return [seg for seg in SEGMENTS if fired[seg]]
+        line = [x["fav_home"], x["spread"], x["total_centered"]]
+        context = {"rest_mismatch": line + [rest_fav - rest_dog], "ats_streak": line + [rest_fav, rest_dog, *streaks]}
+        return {seg: context.get(seg, line + [rest_fav, rest_dog]) for seg in SEGMENTS if fired[seg]}
 
     def ats_streak(self, pre, team):
         # the sum of the team's last line errors this season when they share a sign and are big (an ATS run the market may overprice), else 0
@@ -295,23 +298,14 @@ class Model:
             return sum(e)
         return 0.0
 
-    def segment_context(self, pre, x, seg):
-        # line, venue, total deviation from the league level and rest (spread: per side; total: the favourite's rest edge)
-        fav, dog = self.sides(pre)
-        rest_fav, rest_dog = self.short_rest(pre)
-        if SEGMENTS[seg][0] == "id_spread":
-            extra = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)] if seg == "ats_streak" else []
-            return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
-        return [x["fav_home"], x["spread"], x["total_centered"], rest_fav - rest_dog]  # the shorter rest is always 1 in rest_mismatch
-
     def segment_lines(self, pre, x, out):
         # segment games: P(1) = Phi(predicted line error / residual sd) of the segment's ridge, fit once per season on previous
         # seasons' segment games, replacing or blended with the model for that target only; the context ends with the model's
         # own logit, so each ridge also learns how far to trust the model in its segment
         model_logit = {t: logit(p) for t, p in out.items()}
-        for seg in self.segments(pre):
+        for seg, context in self.segments(pre, x).items():
             t, weight = SEGMENTS[seg]
-            f = self.segment_context(pre, x, seg) + [model_logit[t]]
+            f = context + [model_logit[t]]
             self.pending[self.game_key(pre)]["segment"][seg] = f
             if self.segment_reg[seg] is not None:
                 out[t] = (1 - weight) * out[t] + weight * line_ridge_prob(self.segment_reg[seg], f)
@@ -327,7 +321,7 @@ class Model:
         # playoff-bubble team covers;
         # total - a team's last regular-season game or two lottery teams go over
         rules = {}
-        if pre["regular"] and pre["season"] == self.season:  # standings are last season's until the first result
+        if pre["regular"] and pre["season"] == self.season:  # this season's state (standings, ATS form) starts with its first result
             fav, dog = self.sides(pre)
             if spread_logit > FAV_LEAN and self.ats_form(pre, fav) - self.ats_form(pre, dog) > FAV_LEAN_ATS_GAP:
                 rules["id_spread"] = ("fav_lean", -1)  # the model's favourite leans over-trust the favourite
@@ -375,9 +369,9 @@ class Model:
                 self.route_rate[rule][1] += 1
         for target, models in self.models.items():
             y = result[target]
-            if y is not None and y != PUSH:
+            if y in (0, 1):
                 xt = self.view(x, target)
-                xs = self.scalers[target].transform_one(xt)  # same scaling as at predict time
+                xs = self.scalers[target].transform_one(xt)  # scaled before this row updates the scaler
                 if target == "id_spread" and self.season_games <= ELO_WARMUP:
                     xt = {k: v for k, v in xt.items() if k not in ELO_FEATURES}  # zeroed Elo features do not shape the scaler
                 self.scalers[target].learn_one(xt)
