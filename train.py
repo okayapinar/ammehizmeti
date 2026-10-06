@@ -307,13 +307,13 @@ class Model:
         return 0.0
 
     def segment_context(self, pre, x, seg):
-        # line, venue, total deviation from the league level and rest (spread: per side; total: the shorter rest and the favourite's rest edge)
+        # line, venue, total deviation from the league level and rest (spread: per side; total: the favourite's rest edge)
         fav, dog = self.sides(pre)
         rest_fav, rest_dog = self.short_rest(pre)
         if SEGMENTS[seg][0] == "id_spread":
             extra = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)] if seg == "ats_streak" else []
             return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
-        return [x["fav_home"], x["spread"], x["total_centered"], min(rest_fav, rest_dog), rest_fav - rest_dog]
+        return [x["fav_home"], x["spread"], x["total_centered"], rest_fav - rest_dog]  # the shorter rest is always 1 in rest_mismatch
 
     def segment_lines(self, pre, x, out):
         # segment games: P(1) = Phi(predicted line error / residual sd) of the segment's ridge, fit once per season on previous
