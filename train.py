@@ -41,7 +41,7 @@ SEASON_LENGTH = {2012: 66, 2021: 72}  # shortened seasons (lockout, pandemic); 8
 STAKES_FROM = 60  # team games played before the standings define a playoff-bubble team
 TEMPERATURE_LR, TEMPERATURE_MIN = 0.01, 0.05  # online calibration slope on the final logit
 RIDGE_ALPHA = 10.0  # penalty of the line-error ridges (playoffs, regular-season segments)
-PLAYOFF_RIDGE_MIN, SEGMENT_RIDGE_MIN = 200, 60  # past games a playoff / segment ridge needs
+RIDGE_MIN = 60  # past games a line-error ridge needs
 ALTITUDE = ("den", "utah")  # high-altitude home courts
 # regular-season segments with their own line-error ridge: name -> (target, weight of the ridge probability)
 SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5), "ats_streak": ("id_spread", 0.5),
@@ -62,9 +62,9 @@ def logit(p):
     return math.log(p / (1 - p))
 
 
-def fit_line_ridge(rows, min_rows):
+def fit_line_ridge(rows):
     # ridge of the line error on (context, error) rows: (scaler, ridge, residual sd), or None with too few rows
-    if len(rows) < min_rows:
+    if len(rows) < RIDGE_MIN:
         return None
     X, y = np.array([f for f, _ in rows]), np.array([y for _, y in rows])
     scaler = StandardScaler().fit(X)
@@ -266,7 +266,7 @@ class Model:
     def fit_playoff_reg(self, season):
         # once per postseason, per target: ridge of the line error on all previous postseasons
         for t in TARGETS:
-            self.playoff_reg[t] = fit_line_ridge([(f, y) for s, f, y in self.playoff_rows[t] if s < season], PLAYOFF_RIDGE_MIN)
+            self.playoff_reg[t] = fit_line_ridge([(f, y) for s, f, y in self.playoff_rows[t] if s < season])
 
     def playoff_lines(self, pre, x, out):
         # playoff games: P(1) = Phi(predicted line error / residual sd) of the playoff regressions (spread: replaces the model; total: 50/50)
@@ -322,7 +322,7 @@ class Model:
         if self.segment_reg_season != pre["season"]:
             self.segment_reg_season = pre["season"]
             for seg in SEGMENTS:
-                self.segment_reg[seg] = fit_line_ridge([(f, y) for s, f, y in self.segment_rows[seg] if s < pre["season"]], SEGMENT_RIDGE_MIN)
+                self.segment_reg[seg] = fit_line_ridge([(f, y) for s, f, y in self.segment_rows[seg] if s < pre["season"]])
         model_logit = {t: logit(p) for t, p in out.items()}
         for seg in self.segments(pre):
             t, weight = SEGMENTS[seg]
