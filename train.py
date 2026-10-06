@@ -316,10 +316,10 @@ class Model:
         return sum(errors) / len(errors) if errors else 0.0
 
     def route(self, pre, out, spread_logit):
-        # override rules (target -> (rule, side)), each picking its side with the rule's running hit rate:
-        # spread - the underdog when the model leans to a favourite whose ATS form is not far below the underdog's, else the lone
-        # playoff-bubble team covers;
-        # total - a team's last regular-season game or two lottery teams go over
+        # override rules (target -> (rule, side)): the output is the rule's running hit rate for its side, so a rule bets on whichever
+        # side its record favours; spread - the underdog when the model leans to a favourite whose ATS form is not far below the
+        # underdog's, else the lone playoff-bubble team; total - a team's last regular-season game (over), two lottery teams (the
+        # running over rate has stayed below .5 since 2010: in practice an under rule)
         rules = {}
         if pre["regular"] and pre["season"] == self.season:  # this season's state (standings, ATS form) starts with its first result
             fav, dog = self.sides(pre)
@@ -330,7 +330,7 @@ class Model:
             if self.final_game(fav) or self.final_game(dog):
                 rules["id_total"] = ("final", 1)
             elif self.lottery(fav) and self.lottery(dog):
-                rules["id_total"] = ("lottery", 1)  # two lottery teams: little defence late in the season
+                rules["id_total"] = ("lottery", 1)
         for t, (rule, side) in rules.items():
             self.pending[self.game_key(pre)]["routed"][t] = (rule, side)
             hits, n = self.route_rate[rule]
