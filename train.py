@@ -88,13 +88,12 @@ class Model:
 
     def __init__(self):
         self.scalers = {t: preprocessing.StandardScaler() for t in TARGETS}
-        # ensemble members: (early-season threshold, model) for every lr; the spread view has no early-season indicator,
-        # so it needs only one threshold per lr (triplicates would be identical under a plain mean)
-        member_thresholds = {"id_total": EARLY_THRESHOLDS, "id_spread": EARLY_THRESHOLDS[:1]}
+        # ensemble members: (early-season threshold, model) for every lr; the spread view has no early-season indicator (None)
+        member_thresholds = {"id_total": EARLY_THRESHOLDS, "id_spread": (None,)}
         self.models = {t: [(thr, linear_model.LogisticRegression(optim.SGD(lr))) for lr in LRS for thr in member_thresholds[t]] for t in TARGETS}
         # temperature calibration of the final probability (a slope on its logit: never changes a pick)
         self.temperature = defaultdict(lambda: 1.0)  # per (target, phase): the final probability is built differently in each phase
-        self.pending = {}
+        self.pending = {}  # game key -> what predict() leaves for learn(): {"logit", "routed", "playoff", "segment"} by target / segment
         self.elo = defaultdict(lambda: ELO_START)
         self.last_game = {}
         self.mean_total = None
@@ -105,17 +104,14 @@ class Model:
         self.series_last = {}
         self.playoff_opponents = defaultdict(set)  # this postseason's opponents per team (round number)
         self.playoff_rows = {t: [] for t in TARGETS}  # past playoff games: (season, context, line error: favourite's margin / total residual)
-        self.playoff_pending = {}
         self.playoff_reg = {}
         self.segment_rows = {seg: [] for seg in SEGMENTS}  # past segment games: (season, context, line error)
-        self.segment_pending = {}
         self.segment_reg = {}
         self.ridge_season = None  # the season the line-error ridges were last fit for
         self.line_errors = defaultdict(list)  # (season, team) -> its regular-season line errors (margin minus line-implied margin)
         self.last_ot = {}  # (season, team) -> whether its last regular-season game went to overtime
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
-        self.routed = {}
         self.late_model = linear_model.LogisticRegression(optim.SGD(LATE_EXPERT_LR))  # the total's late regular-season expert
 
     @staticmethod
@@ -227,22 +223,18 @@ class Model:
             return "late"
         return "early" if self.season_games < EARLY_THRESHOLDS[1] else "main"
 
-    def expert(self, pre, target, late_left):
-        # the late regular-season expert for late total games, else None
-        return self.late_model if self.phase(pre, target, late_left) == "late" else None
-
     def predict(self, pre):
         if self.ridge_season != pre["season"]:
             self.fit_ridges(pre["season"])
+        self.pending[self.game_key(pre)] = {"logit": {}, "routed": {}, "playoff": {}, "segment": {}}
         x = self.features(pre)
         out = {}
         for target, models in self.models.items():
             xs = self.scalers[target].transform_one(self.view(x, target))
             ps = [model.predict_proba_one(self.early_view(xs, g)).get(1, 0.5) for g, model in models]
             out[target] = sum(ps) / len(ps)
-            expert = self.expert(pre, target, LATE_PREDICT_LEFT)
-            if expert is not None:  # 50/50 blend with the late expert
-                out[target] = 0.5 * out[target] + 0.5 * expert.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
+            if self.phase(pre, target) == "late":  # late regular-season total games: 50/50 blend with the late expert
+                out[target] = 0.5 * out[target] + 0.5 * self.late_model.predict_proba_one(self.expert_view(xs)).get(1, 0.5)
         spread_logit = logit(out["id_spread"])  # the model's own spread lean (regular season: before segments and routers)
         if pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
             self.playoff_lines(pre, x, out)
@@ -278,29 +270,23 @@ class Model:
         # playoff games: P(1) = Phi(predicted line error / residual sd) of the playoff regressions (spread: replaces the model; total: 50/50)
         for t in TARGETS:
             f = self.playoff_context(pre, x, t)
-            self.playoff_pending[(self.game_key(pre), t)] = f
+            self.pending[self.game_key(pre)]["playoff"][t] = f
             if self.playoff_reg[t] is not None:
                 p = line_ridge_prob(self.playoff_reg[t], f)
                 out[t] = p if t == "id_spread" else 0.5 * out[t] + 0.5 * p
 
     def segments(self, pre):
-        # the game's regular-season segments: the visitor on a back-to-back at altitude; a rest mismatch (one team on a
-        # back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a team whose previous game went to overtime;
-        # a contending favourite on the second night of a back-to-back (load management)
+        # the game's regular-season segments, in SEGMENTS order: the visitor on a back-to-back at altitude; a rest mismatch (one team
+        # on a back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a team whose previous game went to
+        # overtime; a contending favourite on the second night of a back-to-back (load management)
         fav, dog = self.sides(pre)
         rest_fav, rest_dog = self.short_rest(pre)
-        segs = []
-        if pre["home"] in ALTITUDE and self.rest_days(pre["away"], pre["date"]) <= 1:
-            segs.append("altitude_b2b")
-        if abs(rest_fav - rest_dog) >= 2 and min(rest_fav, rest_dog) <= 1:
-            segs.append("rest_mismatch")
-        if self.ats_streak(pre, fav) or self.ats_streak(pre, dog):
-            segs.append("ats_streak")
-        if self.last_ot.get((pre["season"], fav)) or self.last_ot.get((pre["season"], dog)):
-            segs.append("prev_ot")
-        if self.contender(fav) and rest_fav <= 1:
-            segs.append("contender_b2b")
-        return segs
+        fired = {"altitude_b2b": pre["home"] in ALTITUDE and self.rest_days(pre["away"], pre["date"]) <= 1,
+                 "rest_mismatch": abs(rest_fav - rest_dog) >= 2 and min(rest_fav, rest_dog) <= 1,
+                 "ats_streak": self.ats_streak(pre, fav) or self.ats_streak(pre, dog),
+                 "prev_ot": self.last_ot.get((pre["season"], fav)) or self.last_ot.get((pre["season"], dog)),
+                 "contender_b2b": self.contender(fav) and rest_fav <= 1}
+        return [seg for seg in SEGMENTS if fired[seg]]
 
     def ats_streak(self, pre, team):
         # the sum of the team's last line errors this season when they share a sign and are big (an ATS run the market may overprice), else 0
@@ -326,7 +312,7 @@ class Model:
         for seg in self.segments(pre):
             t, weight = SEGMENTS[seg]
             f = self.segment_context(pre, x, seg) + [model_logit[t]]
-            self.segment_pending[(self.game_key(pre), seg)] = f
+            self.pending[self.game_key(pre)]["segment"][seg] = f
             if self.segment_reg[seg] is not None:
                 out[t] = (1 - weight) * out[t] + weight * line_ridge_prob(self.segment_reg[seg], f)
 
@@ -352,7 +338,7 @@ class Model:
             elif self.lottery(fav) and self.lottery(dog):
                 rules["id_total"] = ("lottery", 1)  # two lottery teams: little defence late in the season
         for t, (rule, side) in rules.items():
-            self.routed[(self.game_key(pre), t)] = (rule, side)
+            self.pending[self.game_key(pre)]["routed"][t] = (rule, side)
             hits, n = self.route_rate[rule]
             out[t] = hits / n if side > 0 else 1 - hits / n
 
@@ -366,29 +352,25 @@ class Model:
 
     def calibrate(self, pre, out):
         # remember each logit until the result arrives
-        key = self.game_key(pre)
         for t in TARGETS:
             z = logit(out[t])
             tk = (t, self.phase(pre, t))
-            self.pending[(key, t)] = (z, tk)
+            self.pending[self.game_key(pre)]["logit"][t] = (z, tk)
             out[t] = self.calibrated(z, tk)
         return out
 
-    def learn_temperature(self, pre, result):
-        key = self.game_key(pre)
-        for t in TARGETS:
-            entry = self.pending.pop((key, t), None)
-            if entry is not None and result[t] in (0, 1):
-                z, tk = entry
+    def learn_temperature(self, logits, result):
+        for t, (z, tk) in logits.items():
+            if result[t] in (0, 1):
                 p = self.calibrated(z, tk)
                 self.temperature[tk] = max(TEMPERATURE_MIN, self.temperature[tk] + TEMPERATURE_LR * (result[t] - p) * z)
 
     def learn(self, pre, result):
         x = self.features(pre)
-        self.learn_temperature(pre, result)
-        for t in TARGETS:
-            rule, side = self.routed.pop((self.game_key(pre), t), (None, 0))
-            if side and result[t] in (0, 1):
+        pending = self.pending.pop(self.game_key(pre))
+        self.learn_temperature(pending["logit"], result)
+        for t, (rule, side) in pending["routed"].items():
+            if result[t] in (0, 1):
                 self.route_rate[rule][0] += float((result[t] == 1) == (side > 0))
                 self.route_rate[rule][1] += 1
         for target, models in self.models.items():
@@ -401,20 +383,15 @@ class Model:
                 self.scalers[target].learn_one(xt)
                 for g, model in models:
                     learn_smoothed(model, self.early_view(xs, g), y)
-                expert = self.expert(pre, target, LATE_LEARN_LEFT)
-                if expert is not None:
-                    learn_smoothed(expert, self.expert_view(xs), y)
+                if self.phase(pre, target, LATE_LEARN_LEFT) == "late":  # the late total expert learns in a longer window
+                    learn_smoothed(self.late_model, self.expert_view(xs), y)
         margin = result["score_home"] - result["score_away"]
         errors = {"id_spread": (margin if pre["whos_favored"] == "home" else -margin) - (pre["spread"] or 0.0),
                   "id_total": result["score_home"] + result["score_away"] - (pre["total"] or 0.0)}
-        for t in TARGETS:
-            f = self.playoff_pending.pop((self.game_key(pre), t), None)
-            if f is not None:
-                self.playoff_rows[t].append((pre["season"], f, errors[t]))
-        for seg, (t, _) in SEGMENTS.items():
-            f = self.segment_pending.pop((self.game_key(pre), seg), None)
-            if f is not None:
-                self.segment_rows[seg].append((pre["season"], f, errors[t]))
+        for t, f in pending["playoff"].items():
+            self.playoff_rows[t].append((pre["season"], f, errors[t]))
+        for seg, f in pending["segment"].items():
+            self.segment_rows[seg].append((pre["season"], f, errors[SEGMENTS[seg][0]]))
         home_error = errors["id_spread"] if pre["whos_favored"] == "home" else -errors["id_spread"]  # the home team's margin minus its line-implied margin
         if pre["regular"] and pre["spread"] is not None and pre["total"] is not None:
             self.line_errors[(pre["season"], pre["home"])].append(home_error)
