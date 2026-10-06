@@ -45,8 +45,9 @@ PLAYOFF_RIDGE_MIN, SEGMENT_RIDGE_MIN = 200, 60  # past games a playoff / segment
 ALTITUDE = ("den", "utah")  # high-altitude home courts
 # regular-season segments with their own line-error ridge: name -> (target, weight of the ridge probability)
 SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5), "ats_streak": ("id_spread", 0.5),
-            "prev_ot": ("id_spread", 0.5)}
+            "prev_ot": ("id_spread", 0.5), "contender_b2b": ("id_spread", 0.5)}
 ATS_STREAK_GAMES, ATS_STREAK_MEAN = 3, 14.0  # a team's last 3 line errors share a sign with mean |error| >= 14 points
+CONTENDER_GAMES, CONTENDER_PCT = 41, 0.6  # load management: a .600+ team in the second half of its season
 FAV_LEAN, FAV_LEAN_ATS_GAP = 0.06051, -2.75  # fav_lean router: model spread logit above this, favourite's last-5 ATS form minus the underdog's above this
 
 # features each target's model sees (the spread model: Elo vs the line; the total model: line level and schedule context)
@@ -166,6 +167,11 @@ class Model:
         # the team's last regular-season game
         return sum(self.record[team]) == SEASON_LENGTH.get(self.season, 82) - 1
 
+    def contender(self, team):
+        # a .600+ team in the second half of its season (stars' minutes are managed for the playoffs)
+        wins, losses = self.record[team]
+        return wins + losses >= CONTENDER_GAMES and wins / (wins + losses) >= CONTENDER_PCT
+
     def features(self, pre):
         home, away, date = pre["home"], pre["away"], pre["date"]
         fav_home = pre["whos_favored"] == "home"
@@ -267,7 +273,8 @@ class Model:
 
     def segments(self, pre):
         # the game's regular-season segments: the visitor on a back-to-back at altitude; a rest mismatch (one team on a
-        # back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a team whose previous game went to overtime
+        # back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a team whose previous game went to overtime;
+        # a contending favourite on the second night of a back-to-back (load management)
         fav, dog = (pre["home"], pre["away"]) if pre["whos_favored"] == "home" else (pre["away"], pre["home"])
         rest_fav, rest_dog = min(self.rest_days(fav, pre["date"]), 4), min(self.rest_days(dog, pre["date"]), 4)
         segs = []
@@ -279,6 +286,8 @@ class Model:
             segs.append("ats_streak")
         if self.last_ot.get((pre["season"], fav)) or self.last_ot.get((pre["season"], dog)):
             segs.append("prev_ot")
+        if self.contender(fav) and rest_fav <= 1:
+            segs.append("contender_b2b")
         return segs
 
     def ats_streak(self, pre, team):
