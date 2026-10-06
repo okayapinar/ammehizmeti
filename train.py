@@ -29,7 +29,7 @@ ELO_TOSSUP_GAP, ELO_TOSSUP_BOOST = 50, 1.16  # early window: games between teams
 LRS = (0.003, 0.005, 0.008)
 LINE_ALPHA = 0.011
 EARLY_THRESHOLDS = (60, 120, 190)
-SMOOTH_LABEL_W, SMOOTH_FLIP_W = 0.88, 0.12  # label smoothing: weight of the observed label and of the opposite label
+SMOOTH_LABEL_W = 0.88  # label smoothing: weight of the observed label (the opposite label gets the rest)
 LATE_PREDICT_LEFT, LATE_LEARN_LEFT = 230, 280  # late-season total expert: votes / learns in the last this many league games of the regular season
 LATE_EXPERT_LR = 0.0065
 SPREAD_CAP, TOTAL_CAP = 19.0, 250.0  # line caps for the model features (spread_raw keeps the uncapped spread)
@@ -80,7 +80,7 @@ def line_ridge_prob(fit, f):
 
 def learn_smoothed(model, x, y):
     model.learn_one(x, y, w=SMOOTH_LABEL_W)
-    model.learn_one(x, 1 - y, w=SMOOTH_FLIP_W)
+    model.learn_one(x, 1 - y, w=1 - SMOOTH_LABEL_W)
 
 
 class Model:
@@ -155,9 +155,9 @@ class Model:
         return 0.0 if pre["regular"] else PLAY_IN_SERIES
 
     def late_rank(self, team):
-        # late season (60+ team games, games left): conference rank by wins minus losses, else None
+        # late season (60+ team games): conference rank by wins minus losses, else None
         wins, losses = self.record[team]
-        if wins + losses < STAKES_FROM or wins + losses >= SEASON_LENGTH.get(self.season, 82):
+        if wins + losses < STAKES_FROM:
             return None
         mates = [(w, l) for t, (w, l) in self.record.items() if t != team and CONFERENCE.get(t) == CONFERENCE.get(team)]
         return 1 + sum(w - l > wins - losses for w, l in mates)
@@ -243,7 +243,7 @@ class Model:
         spread_logit = logit(out["id_spread"])  # the model's own spread lean (regular season: before segments and routers)
         if pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
             self.playoff_lines(pre, x, out)
-        if pre["regular"] and not pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
+        if pre["regular"] and pre["spread"] is not None and pre["total"] is not None:
             self.segment_lines(pre, x, out)
         self.route(pre, out, spread_logit)
         return self.calibrate(pre, out)
@@ -342,7 +342,7 @@ class Model:
         # playoff-bubble team covers;
         # total - a team's last regular-season game or two lottery teams go over
         rules = {}
-        if pre["regular"] and not pre["playoffs"] and pre["season"] == self.season:  # standings are last season's until the first result
+        if pre["regular"] and pre["season"] == self.season:  # standings are last season's until the first result
             fav, dog = self.sides(pre)
             if spread_logit > FAV_LEAN and self.ats_form(pre, fav) - self.ats_form(pre, dog) > FAV_LEAN_ATS_GAP:
                 rules["id_spread"] = ("fav_lean", -1)  # the model's favourite leans over-trust the favourite
@@ -416,11 +416,11 @@ class Model:
             f = self.segment_pending.pop((self.game_key(pre), seg), None)
             if f is not None:
                 self.segment_rows[seg].append((pre["season"], f, errors[t]))
-        if pre["regular"] and not pre["playoffs"] and pre["spread"] is not None and pre["total"] is not None:
+        if pre["regular"] and pre["spread"] is not None and pre["total"] is not None:
             self.line_errors[(pre["season"], pre["home"])].append(errors["id_spread"] if pre["whos_favored"] == "home" else -errors["id_spread"])
             self.line_errors[(pre["season"], pre["away"])].append(-errors["id_spread"] if pre["whos_favored"] == "home" else errors["id_spread"])
             for team in (pre["home"], pre["away"]):
-                self.last_ot[(pre["season"], team)] = (result["ot_home"] or 0) + (result["ot_away"] or 0) > 0
+                self.last_ot[(pre["season"], team)] = result["ot_home"] + result["ot_away"] > 0
 
         self.update_state(pre, result)
 
@@ -440,7 +440,7 @@ class Model:
             if pre["spread"] is not None and pre["total"] is not None:
                 home, away = pre["home"], pre["away"]
                 error = result["score_home"] - result["score_away"] - (pre["spread"] if pre["whos_favored"] == "home" else -pre["spread"])
-                overtime = (result["ot_home"] or 0) + (result["ot_away"] or 0)
+                overtime = result["ot_home"] + result["ot_away"]
                 self.series_last[frozenset((home, away))] = ({home: error, away: -error}, result["score_home"] + result["score_away"] - pre["total"],
                                                              overtime, pre["total"])
                 self.playoff_opponents[home].add(away)
