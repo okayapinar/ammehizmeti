@@ -258,7 +258,7 @@ class Model:
         rest_fav, rest_dog = self.short_rest(pre)
         last = self.series_last.get(frozenset((fav, dog)))
         if target == "id_total":
-            return [x["total_centered"], x["total"], x["spread"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
+            return [x["total_centered"], x["spread"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
                     min(rest_fav, rest_dog), last[1] - last[2] if last else 0.0, last[2] if last else 0.0, pre["total"] - last[3] if last else 0.0]
         return [x["fav_home"], x["spread"], x["total_centered"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
                 min(rest_fav, rest_dog), rest_fav - rest_dog, last[0][fav] if last else 0.0, last[1] if last else 0.0]
@@ -307,13 +307,13 @@ class Model:
         return 0.0
 
     def segment_context(self, pre, x, seg):
-        # line, venue, total level and rest (spread: per side; total: the shorter rest and the favourite's rest edge)
+        # line, venue, total deviation from the league level and rest (spread: per side; total: the shorter rest and the favourite's rest edge)
         fav, dog = self.sides(pre)
         rest_fav, rest_dog = self.short_rest(pre)
         if SEGMENTS[seg][0] == "id_spread":
             extra = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)] if seg == "ats_streak" else []
             return [x["fav_home"], x["spread"], x["total_centered"], rest_fav, rest_dog, *extra]
-        return [x["fav_home"], x["spread"], x["total_centered"], x["total"], min(rest_fav, rest_dog), rest_fav - rest_dog]
+        return [x["fav_home"], x["spread"], x["total_centered"], min(rest_fav, rest_dog), rest_fav - rest_dog]
 
     def segment_lines(self, pre, x, out):
         # segment games: P(1) = Phi(predicted line error / residual sd) of the segment's ridge, fit once per season on previous
