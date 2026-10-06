@@ -106,10 +106,11 @@ class Model:
         self.playoff_opponents = defaultdict(set)  # this postseason's opponents per team (round number)
         self.playoff_rows = {t: [] for t in TARGETS}  # past playoff games: (season, context, line error: favourite's margin / total residual)
         self.playoff_pending = {}
-        self.playoff_reg, self.playoff_reg_season = {}, None
+        self.playoff_reg = {}
         self.segment_rows = {seg: [] for seg in SEGMENTS}  # past segment games: (season, context, line error)
         self.segment_pending = {}
-        self.segment_reg, self.segment_reg_season = {}, None
+        self.segment_reg = {}
+        self.ridge_season = None  # the season the line-error ridges were last fit for
         self.line_errors = defaultdict(list)  # (season, team) -> its regular-season line errors (margin minus line-implied margin)
         self.last_ot = {}  # (season, team) -> whether its last regular-season game went to overtime
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
@@ -231,6 +232,8 @@ class Model:
         return self.late_model if self.phase(pre, target, late_left) == "late" else None
 
     def predict(self, pre):
+        if self.ridge_season != pre["season"]:
+            self.fit_ridges(pre["season"])
         x = self.features(pre)
         out = {}
         for target, models in self.models.items():
@@ -263,16 +266,16 @@ class Model:
         return [x["fav_home"], x["spread"], x["total_centered"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
                 min(rest_fav, rest_dog), rest_fav - rest_dog, last[0][fav] if last else 0.0, last[1] if last else 0.0]
 
-    def fit_playoff_reg(self, season):
-        # once per postseason, per target: ridge of the line error on all previous postseasons
+    def fit_ridges(self, season):
+        # once per season: the line-error ridges (playoffs per target, regular-season segments) on all previous seasons' games
+        self.ridge_season = season
         for t in TARGETS:
             self.playoff_reg[t] = fit_line_ridge([(f, y) for s, f, y in self.playoff_rows[t] if s < season])
+        for seg in SEGMENTS:
+            self.segment_reg[seg] = fit_line_ridge([(f, y) for s, f, y in self.segment_rows[seg] if s < season])
 
     def playoff_lines(self, pre, x, out):
         # playoff games: P(1) = Phi(predicted line error / residual sd) of the playoff regressions (spread: replaces the model; total: 50/50)
-        if self.playoff_reg_season != pre["season"]:
-            self.playoff_reg_season = pre["season"]
-            self.fit_playoff_reg(pre["season"])
         for t in TARGETS:
             f = self.playoff_context(pre, x, t)
             self.playoff_pending[(self.game_key(pre), t)] = f
@@ -319,10 +322,6 @@ class Model:
         # segment games: P(1) = Phi(predicted line error / residual sd) of the segment's ridge, fit once per season on previous
         # seasons' segment games, replacing or blended with the model for that target only; the context ends with the model's
         # own logit, so each ridge also learns how far to trust the model in its segment
-        if self.segment_reg_season != pre["season"]:
-            self.segment_reg_season = pre["season"]
-            for seg in SEGMENTS:
-                self.segment_reg[seg] = fit_line_ridge([(f, y) for s, f, y in self.segment_rows[seg] if s < pre["season"]])
         model_logit = {t: logit(p) for t, p in out.items()}
         for seg in self.segments(pre):
             t, weight = SEGMENTS[seg]
@@ -416,15 +415,16 @@ class Model:
             f = self.segment_pending.pop((self.game_key(pre), seg), None)
             if f is not None:
                 self.segment_rows[seg].append((pre["season"], f, errors[t]))
+        home_error = errors["id_spread"] if pre["whos_favored"] == "home" else -errors["id_spread"]  # the home team's margin minus its line-implied margin
         if pre["regular"] and pre["spread"] is not None and pre["total"] is not None:
-            self.line_errors[(pre["season"], pre["home"])].append(errors["id_spread"] if pre["whos_favored"] == "home" else -errors["id_spread"])
-            self.line_errors[(pre["season"], pre["away"])].append(-errors["id_spread"] if pre["whos_favored"] == "home" else errors["id_spread"])
+            self.line_errors[(pre["season"], pre["home"])].append(home_error)
+            self.line_errors[(pre["season"], pre["away"])].append(-home_error)
             for team in (pre["home"], pre["away"]):
                 self.last_ot[(pre["season"], team)] = result["ot_home"] + result["ot_away"] > 0
 
-        self.update_state(pre, result)
+        self.update_state(pre, result, home_error)
 
-    def update_state(self, pre, result):
+    def update_state(self, pre, result, home_error):
         if pre["season"] != self.season:
             self.season = pre["season"]
             self.season_games = 0
@@ -439,9 +439,8 @@ class Model:
             self.series[frozenset((pre["home"], pre["away"]))] += 1
             if pre["spread"] is not None and pre["total"] is not None:
                 home, away = pre["home"], pre["away"]
-                error = result["score_home"] - result["score_away"] - (pre["spread"] if pre["whos_favored"] == "home" else -pre["spread"])
                 overtime = result["ot_home"] + result["ot_away"]
-                self.series_last[frozenset((home, away))] = ({home: error, away: -error}, result["score_home"] + result["score_away"] - pre["total"],
+                self.series_last[frozenset((home, away))] = ({home: home_error, away: -home_error}, result["score_home"] + result["score_away"] - pre["total"],
                                                              overtime, pre["total"])
                 self.playoff_opponents[home].add(away)
                 self.playoff_opponents[away].add(home)
