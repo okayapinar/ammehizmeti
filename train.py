@@ -434,7 +434,6 @@ class Model:
             self.record = defaultdict(lambda: [0, 0])
             for t in list(self.elo):
                 self.elo[t] = (1 - ELO_REGRESS) * self.elo[t] + ELO_REGRESS * ELO_START
-        self.season_games += 1
         if pre["playoffs"]:
             self.series[frozenset((pre["home"], pre["away"]))] += 1
             if pre["spread"] is not None and pre["total"] is not None:
@@ -445,6 +444,7 @@ class Model:
                 self.playoff_opponents[home].add(away)
                 self.playoff_opponents[away].add(home)
         elif pre["regular"]:
+            self.season_games += 1  # the league's regular-season clock (the Cup final, play-in and playoffs do not advance it)
             home_won = result["score_home"] > result["score_away"]
             self.record[pre["home"]][0 if home_won else 1] += 1
             self.record[pre["away"]][1 if home_won else 0] += 1
