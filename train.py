@@ -16,7 +16,7 @@ from sklearn.preprocessing import StandardScaler
 
 from prepare import TARGETS, evaluate, load_team_maps, print_summary
 
-MAX_REST_DAYS = 20
+MAX_REST_DAYS = 18
 ELO_K = 20.5
 ELO_START = 1500
 ELO_HOME_ADV = 55
