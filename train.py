@@ -45,8 +45,10 @@ RIDGE_MIN = 60  # past games a line-error ridge needs
 ALTITUDE = ("den", "utah")  # high-altitude home courts
 # regular-season segments with their own line-error ridge: name -> (target, weight of the ridge probability)
 SEGMENTS = {"altitude_b2b": ("id_spread", 1.0), "rest_mismatch": ("id_total", 0.5), "ats_streak": ("id_spread", 0.5),
-            "prev_ot": ("id_spread", 0.5), "contender_b2b": ("id_spread", 0.5)}
+            "prev_ot": ("id_spread", 0.5), "contender_b2b": ("id_spread", 0.5),
+            "co_week": ("id_spread", 0.5)}
 ATS_STREAK_GAMES, ATS_STREAK_MEAN = 3, 14.0  # a team's last 3 line errors share a sign with mean |error| >= 14 points
+COMMON_DAYS = 7  # co_week: both teams met the same opponent within the last 7 days
 CONTENDER_GAMES, CONTENDER_PCT = 41, 0.6  # load management: a .600+ team with 41+ games played
 FAV_LEAN, FAV_LEAN_ATS_GAP = 0.06051, -2.75  # fav_lean router: model spread logit above this, favourite's last-5 ATS form minus the underdog's above this
 
@@ -109,6 +111,7 @@ class Model:
         self.segment_reg = {}
         self.ridge_season = None  # the season the line-error ridges were last fit for
         self.line_errors = defaultdict(list)  # (season, team) -> its regular-season line errors (margin minus line-implied margin)
+        self.recent = defaultdict(list)  # team -> its regular-season games: (date, opponent, its line error)
         self.last_ot = {}  # (season, team) -> whether its last regular-season game went to overtime
         self.record = defaultdict(lambda: [0, 0])  # this season's regular-season wins, losses
         self.route_rate = defaultdict(lambda: [1.0, 2.0])  # per rule: routed-side hits, routed games (running hit rate)
@@ -278,9 +281,11 @@ class Model:
     def segments(self, pre, x):
         # the game's regular-season segments, in SEGMENTS order: the visitor on a back-to-back at altitude; a rest mismatch (one team
         # on a back-to-back, the other with 2+ more days of rest); a team on a big ATS streak; a team whose previous game went to
-        # overtime; a contending favourite on the second night of a back-to-back (load management).
+        # overtime; a contending favourite on the second night of a back-to-back (load management); both teams met the same
+        # opponent within the last week (the market may overrate the gap between their results there).
         # Each with its ridge context: line, venue, total deviation from the league level and rest (spread: per side, plus both ATS
-        # streaks in ats_streak; total: the favourite's rest edge - the shorter rest is always 1 in rest_mismatch)
+        # streaks in ats_streak, the gap vs the common opponent in co_week; total: the favourite's rest edge - the shorter rest is
+        # always 1 in rest_mismatch)
         fav, dog = self.sides(pre)
         rest_fav, rest_dog = self.short_rest(pre)
         streaks = [self.ats_streak(pre, fav), self.ats_streak(pre, dog)]
@@ -288,10 +293,22 @@ class Model:
                  "rest_mismatch": abs(rest_fav - rest_dog) >= 2 and min(rest_fav, rest_dog) <= 1,
                  "ats_streak": any(streaks),
                  "prev_ot": self.last_ot.get((pre["season"], fav)) or self.last_ot.get((pre["season"], dog)),
-                 "contender_b2b": self.contender(fav) and rest_fav <= 1}
+                 "contender_b2b": self.contender(fav) and rest_fav <= 1,
+                 "co_week": self.common_gap(pre, fav, dog) is not None}
         line = [x["fav_home"], x["spread"], x["total_centered"]]
-        context = {"rest_mismatch": line + [rest_fav - rest_dog], "ats_streak": line + [rest_fav, rest_dog, *streaks]}
+        context = {"rest_mismatch": line + [rest_fav - rest_dog], "ats_streak": line + [rest_fav, rest_dog, *streaks],
+                   "co_week": line + [rest_fav, rest_dog, self.common_gap(pre, fav, dog) or 0.0]}
         return {seg: context.get(seg, line + [rest_fav, rest_dog]) for seg in SEGMENTS if fired[seg]}
+
+    def common_gap(self, pre, fav, dog):
+        # the latest opponent both teams met within COMMON_DAYS: the favourite's line error there minus the underdog's, else None
+        seen = {opp: e for d, opp, e in self.recent[dog] if (pre["date"] - d).days <= COMMON_DAYS}
+        for d, opp, e in reversed(self.recent[fav]):
+            if (pre["date"] - d).days > COMMON_DAYS:
+                return None
+            if opp in seen and opp != dog:
+                return e - seen[opp]
+        return None
 
     def ats_streak(self, pre, team):
         # the sum of the team's last line errors this season when they share a sign and are big (an ATS run the market may overprice), else 0
@@ -403,6 +420,8 @@ class Model:
             self.line_errors[(pre["season"], pre["away"])].append(-home_error)
             for team in (pre["home"], pre["away"]):
                 self.last_ot[(pre["season"], team)] = result["ot_home"] + result["ot_away"] > 0
+            self.recent[pre["home"]].append((pre["date"], pre["away"], home_error))
+            self.recent[pre["away"]].append((pre["date"], pre["home"], -home_error))
         return home_error
 
     def update_state(self, pre, result, home_error):
