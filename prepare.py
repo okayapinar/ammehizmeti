@@ -22,7 +22,7 @@ DIVISIONS_PATH = "divisions.json"
 TARGETS = ["id_spread", "id_total"]
 PUSH = 2
 VAL_START_SEASON = 2024
-TIME_BUDGET = 300  # saniye; tüm akış bu süreyi aşarsa deney geçersiz sayılır
+TIME_BUDGET = 600  # saniye (10 dk); tüm akış bu süreyi aşarsa deney geçersiz sayılır
 EPS = 1e-6
 
 # Maç başlamadan önce bilinen kolonlar. (h2_spread / h2_total devre arası çizgileridir, verilmez.)

@@ -30,3 +30,9 @@ Desktop.ini
 results.tsv
 run.log
 agent.log
+scratch_*
+r*_out*
+*.diff
+*.patch
+abl*/
+*.pkl
