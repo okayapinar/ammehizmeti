@@ -362,18 +362,24 @@ class Model:
                 self.temperature[tk] = max(TEMPERATURE_MIN, self.temperature[tk] + TEMPERATURE_LR * (result[t] - p) * z)
 
     def learn(self, pre, result):
-        x = self.features(pre)
         pending = self.pending.pop(self.game_key(pre))
         self.learn_temperature(pending["logit"], result)
         for t, (rule, side) in pending["routed"].items():
             if result[t] in (0, 1):
                 self.route_rate[rule][0] += float((result[t] == 1) == (side > 0))
                 self.route_rate[rule][1] += 1
+        self.learn_models(pre, result)
+        home_error = self.record_line_errors(pre, result, pending)
+        self.update_state(pre, result, home_error)
+
+    def learn_models(self, pre, result):
+        # the ensembles and the late total expert, on features scaled before this row updates the scaler
+        x = self.features(pre)
         for target, models in self.models.items():
             y = result[target]
             if y in (0, 1):
                 xt = self.view(x, target)
-                xs = self.scalers[target].transform_one(xt)  # scaled before this row updates the scaler
+                xs = self.scalers[target].transform_one(xt)
                 if target == "id_spread" and self.season_games <= ELO_WARMUP:
                     xt = {k: v for k, v in xt.items() if k not in ELO_FEATURES}  # zeroed Elo features do not shape the scaler
                 self.scalers[target].learn_one(xt)
@@ -381,6 +387,9 @@ class Model:
                     learn_smoothed(model, self.early_view(xs, g), y)
                 if self.phase(pre, target, LATE_LEARN_LEFT) == "late":  # the late total expert learns in a longer window
                     learn_smoothed(self.late_model, self.expert_view(xs), y)
+
+    def record_line_errors(self, pre, result, pending):
+        # line errors (favourite's margin minus the line, total residual) as ridge rows and per-team history; returns the home team's error
         margin = result["score_home"] - result["score_away"]
         errors = {"id_spread": (margin if pre["whos_favored"] == "home" else -margin) - (pre["spread"] or 0.0),
                   "id_total": result["score_home"] + result["score_away"] - (pre["total"] or 0.0)}
@@ -394,8 +403,7 @@ class Model:
             self.line_errors[(pre["season"], pre["away"])].append(-home_error)
             for team in (pre["home"], pre["away"]):
                 self.last_ot[(pre["season"], team)] = result["ot_home"] + result["ot_away"] > 0
-
-        self.update_state(pre, result, home_error)
+        return home_error
 
     def update_state(self, pre, result, home_error):
         if pre["season"] != self.season:
