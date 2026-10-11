@@ -8,7 +8,6 @@ from datetime import datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent
-LOG = ROOT / "agent.log"
 
 PROMPT = (
     "program.md dosyasini oku ve talimatlarini harfiyen uygula. "
@@ -59,7 +58,7 @@ def visible(line):
     return "".join(out)
 
 
-def run_claude(log):
+def run_claude():
     proc = subprocess.Popen(
         [
             shutil.which("claude") or "claude",
@@ -82,8 +81,6 @@ def run_claude(log):
     )
     try:
         for line in proc.stdout:
-            log.write(line)
-            log.flush()
             text = visible(line)
             if text:
                 print(text, end="", flush=True)
@@ -94,18 +91,13 @@ def run_claude(log):
 
 
 def main():
-    with open(LOG, "a", encoding="utf-8") as log:
-        while True:
-            header = f"=== {datetime.now():%Y-%m-%d %H:%M:%S} yeni oturum ===\n"  # noqa: DTZ005
-            print(header, end="")
-            log.write(header)
-
-            if run_claude(log) == 0:
-                time.sleep(5)
-            else:
-                print("claude hata ile cikti, 5 dk bekleniyor")
-                log.write("claude hata ile cikti\n")
-                time.sleep(300)
+    while True:
+        print(f"=== {datetime.now():%Y-%m-%d %H:%M:%S} yeni oturum ===")  # noqa: DTZ005
+        if run_claude() == 0:
+            time.sleep(5)
+        else:
+            print("claude hata ile cikti, 5 dk bekleniyor")
+            time.sleep(300)
 
 
 if __name__ == "__main__":

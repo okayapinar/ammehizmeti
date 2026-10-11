@@ -29,7 +29,6 @@ Desktop.ini
 # autoresearch
 results.tsv
 run.log
-agent.log
 scratch_*
 r*_out*
 *.diff
