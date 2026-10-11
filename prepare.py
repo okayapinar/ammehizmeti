@@ -2,62 +2,42 @@
 """
 Sabit veri + değerlendirme düzeneği (autoresearch). AJAN BU DOSYAYI DEĞİŞTİRMEZ.
 
-Maçlar tarih sırasıyla, gün gün akıtılır (prequential / online):
-  1. O günün tüm maçları için model.predict(pre_game) çağrılır (sadece maç öncesi bilgi).
-  2. Ardından aynı maçlar için model.learn(pre_game, result) çağrılır (skorlar + hedefler).
-Böylece model hiçbir maçın sonucunu tahminden önce göremez (sızıntı yapısal olarak engellenir).
+Her hedef (spread, total) River progressive_val_score ile ayrı akar. Etiket bir gün
+gecikmeyle açılır: aynı günün tüm maçları tahmin edilir, sonuçlar ertesi gün öğrenilir.
+Model yalnızca maç öncesi kolonları (x) ve hedefi (y) görür; skorlar verilmez.
 
-Skor: VAL_START_SEASON ve sonrası sezonlarda, push (2) olmayan maçlar üzerinden
-id_spread ve id_total doğruluklarının ortalaması -> val_acc (yüksek = iyi).
+Skor: push olmayan spread ve total tahminleri üzerinden ortak Accuracy ve LogLoss.
 """
+
+import datetime as dt
 import json
 import math
 import time
-from itertools import groupby
 
 import pandas as pd
+from river import metrics
+from river.evaluate import progressive_val_score
 
 DATA_PATH = "nba_2008-2026.csv"
 DIVISIONS_PATH = "divisions.json"
 TARGETS = ["id_spread", "id_total"]
-PUSH = 2
-VAL_START_SEASON = 2024
-TIME_BUDGET = 600  # saniye (10 dk); tüm akış bu süreyi aşarsa deney geçersiz sayılır
-EPS = 1e-6
+TIME_BUDGET = 600  # saniye; tüm akış bu süreyi aşarsa deney geçersiz sayılır
 
 # Maç başlamadan önce bilinen kolonlar. (h2_spread / h2_total devre arası çizgileridir, verilmez.)
 PRE_GAME_COLUMNS = [
-    "season",
-    "date",
-    "regular",
-    "playoffs",
-    "away",
-    "home",
-    "whos_favored",
-    "spread",
-    "total",
-    "moneyline_away",
-    "moneyline_home",
+    "season", "date", "regular", "playoffs", "away", "home",
+    "whos_favored", "spread", "total", "moneyline_away", "moneyline_home",
 ]
 RESULT_COLUMNS = [
-    "score_away",
-    "score_home",
-    "q1_away",
-    "q2_away",
-    "q3_away",
-    "q4_away",
-    "ot_away",
-    "q1_home",
-    "q2_home",
-    "q3_home",
-    "q4_home",
-    "ot_home",
-    "id_spread",
-    "id_total",
+    "score_away", "score_home",
+    "q1_away", "q2_away", "q3_away", "q4_away", "ot_away",
+    "q1_home", "q2_home", "q3_home", "q4_home", "ot_home",
+    "id_spread", "id_total",
 ]
 
 
 def load_team_maps(path=DIVISIONS_PATH):
+    """team -> division ve team -> conference sözlükleri."""
     with open(path) as f:
         divisions = json.load(f)
 
@@ -80,6 +60,7 @@ def _clean(value):
 
 
 def load_games(path=DATA_PATH):
+    """Tarih sırasıyla (pre, result) çiftleri."""
     df = pd.read_csv(path)
     df["date"] = pd.to_datetime(df["date"]).dt.date
     df = df.sort_values("date", kind="stable")
@@ -95,58 +76,38 @@ def load_games(path=DATA_PATH):
     return games
 
 
-def evaluate(model, time_budget=TIME_BUDGET):
-    """model.predict(pre) -> {"id_spread": P(1), "id_total": P(1)}; model.learn(pre, result)."""
-    games = load_games()
-    stats = {t: {"n": 0, "correct": 0, "logloss": 0.0} for t in TARGETS}
+def progressive_score(make_model, time_budget=TIME_BUDGET):
+    """make_model(target) -> River sınıflandırıcı. Her hedef kendi akışında skorlanır, metrik ortaktır."""
     start = time.time()
+    metric = metrics.Accuracy() + metrics.LogLoss()
+    games = load_games()
 
-    for _, day in groupby(games, key=lambda g: g[0]["date"]):
-        day = list(day)
-        preds = [model.predict(dict(pre)) for pre, _ in day]
+    def stream(target):
+        for pre, result in games:
+            if time.time() - start > time_budget:
+                raise TimeoutError(f"TIME_BUDGET ({time_budget}s) asildi")
+            if result[target] in (0, 1):  # 2 = push, skorlanmaz
+                yield pre, result[target] == 1
 
-        for (pre, result), pred in zip(day, preds):
-            if pre["season"] < VAL_START_SEASON:
-                continue
-            for target in TARGETS:
-                y = result[target]
-                if y is None or y == PUSH:
-                    continue
-                p = min(max(float(pred[target]), EPS), 1 - EPS)
-                s = stats[target]
-                s["n"] += 1
-                s["correct"] += int((p >= 0.5) == (y == 1))
-                s["logloss"] -= math.log(p if y == 1 else 1 - p)
+    for target in TARGETS:
+        progressive_val_score(
+            dataset=stream(target),
+            model=make_model(target),
+            metric=metric,
+            moment="date",
+            delay=dt.timedelta(days=1),
+        )
 
-        for pre, result in day:
-            model.learn(dict(pre), dict(result))
-
-        if time.time() - start > time_budget:
-            raise TimeoutError(f"TIME_BUDGET ({time_budget}s) asildi")
-
-    acc = {t: stats[t]["correct"] / stats[t]["n"] for t in TARGETS}
-    logloss = {t: stats[t]["logloss"] / stats[t]["n"] for t in TARGETS}
-    return {
-        "val_acc": sum(acc.values()) / len(TARGETS),
-        "val_acc_spread": acc["id_spread"],
-        "val_acc_total": acc["id_total"],
-        "val_logloss": sum(logloss.values()) / len(TARGETS),
-        "num_val_games": stats["id_spread"]["n"],
-        "eval_seconds": time.time() - start,
-    }
+    acc, logloss = metric.get()
+    return {"val_acc": acc, "val_logloss": logloss, "eval_seconds": time.time() - start}
 
 
 def print_summary(results):
     print("---")
-    print(f"val_acc:          {results['val_acc']:.6f}")
-    print(f"val_acc_spread:   {results['val_acc_spread']:.6f}")
-    print(f"val_acc_total:    {results['val_acc_total']:.6f}")
-    print(f"val_logloss:      {results['val_logloss']:.6f}")
-    print(f"num_val_games:    {results['num_val_games']}")
-    print(f"eval_seconds:     {results['eval_seconds']:.1f}")
+    print(f"val_acc:       {results['val_acc']:.6f}")
+    print(f"val_logloss:   {results['val_logloss']:.6f}")
+    print(f"eval_seconds:  {results['eval_seconds']:.1f}")
 
 
 if __name__ == "__main__":
-    games = load_games()
-    n_val = sum(pre["season"] >= VAL_START_SEASON for pre, _ in games)
-    print(f"Toplam mac: {len(games)}, val mac (sezon >= {VAL_START_SEASON}): {n_val}")
+    print(f"Toplam mac: {len(load_games())}")
