@@ -252,10 +252,12 @@ class Model:
         rnd = min(len(played) + (pre["away"] not in played), 4)
         rest_fav, rest_dog = self.short_rest(pre)
         last = self.series_last.get(frozenset((fav, dog)))
-        return {"id_spread": [x["fav_home"], x["spread"], x["total_centered"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
-                              min(rest_fav, rest_dog), rest_fav - rest_dog, last[0][fav] if last else 0.0, last[1] if last else 0.0],
-                "id_total": [x["total_centered"], x["spread"], x["series_game"], float(rnd == 2), float(rnd == 3), float(rnd == 4),
-                             min(rest_fav, rest_dog), last[1] - last[2] if last else 0.0, last[2] if last else 0.0, pre["total"] - last[3] if last else 0.0]}
+        # the series' previous game: the favourite's line error, the total residual, overtime points and the total line move since (0 in game 1)
+        fav_error, total_error, overtime, line_move = (last[0][fav], last[1], last[2], pre["total"] - last[3]) if last else (0.0, 0.0, 0.0, 0.0)
+        rounds = [float(rnd == 2), float(rnd == 3), float(rnd == 4)]
+        return {"id_spread": [x["fav_home"], x["spread"], x["total_centered"], x["series_game"], *rounds, min(rest_fav, rest_dog), rest_fav - rest_dog,
+                              fav_error, total_error],
+                "id_total": [x["total_centered"], x["spread"], x["series_game"], *rounds, min(rest_fav, rest_dog), total_error - overtime, overtime, line_move]}
 
     def fit_ridges(self, season):
         # once per season: the line-error ridges (playoffs per target, regular-season segments) on all previous seasons' games
@@ -431,10 +433,7 @@ class Model:
         home, away = pre["home"], pre["away"]
         home_won = result["score_home"] > result["score_away"]
         early = self.season_games <= ELO_WARMUP + ELO_EARLY
-        if early:
-            hca = ELO_HOME_ADV + ELO_EARLY_HCA
-        else:
-            hca = ELO_HOME_ADV
+        hca = ELO_HOME_ADV + (ELO_EARLY_HCA if early else 0)
         expected_home = 1 / (1 + 10 ** ((self.elo[away] - self.elo[home] - hca) / 400))
         k = ELO_CATCHUP_K if self.season_games <= ELO_WARMUP + ELO_CATCHUP_GAMES else ELO_K
         delta = k * (int(home_won) - expected_home)
